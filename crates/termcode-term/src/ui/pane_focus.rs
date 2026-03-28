@@ -6,13 +6,12 @@ use ratatui::widgets::Widget;
 use termcode_theme::theme::Theme;
 
 pub struct PaneTitleWidget<'a> {
-    is_active: bool,
     theme: &'a Theme,
 }
 
 impl<'a> PaneTitleWidget<'a> {
-    pub fn new(is_active: bool, theme: &'a Theme) -> Self {
-        Self { is_active, theme }
+    pub fn new(theme: &'a Theme) -> Self {
+        Self { theme }
     }
 }
 
@@ -22,17 +21,8 @@ impl Widget for PaneTitleWidget<'_> {
             return;
         }
 
-        let (fg, bg) = if self.is_active {
-            (
-                self.theme.ui.pane_active_fg.to_ratatui(),
-                self.theme.ui.pane_active_bg.to_ratatui(),
-            )
-        } else {
-            (
-                self.theme.ui.pane_inactive_fg.to_ratatui(),
-                self.theme.ui.pane_inactive_bg.to_ratatui(),
-            )
-        };
+        let fg = self.theme.ui.pane_inactive_fg.to_ratatui();
+        let bg = self.theme.ui.pane_inactive_bg.to_ratatui();
         let style = Style::default().fg(fg).bg(bg);
 
         for x in area.x..area.x + area.width {
@@ -52,13 +42,12 @@ impl Widget for PaneTitleWidget<'_> {
 }
 
 pub struct PaneBorderWidget<'a> {
-    is_active: bool,
     theme: &'a Theme,
 }
 
 impl<'a> PaneBorderWidget<'a> {
-    pub fn new(is_active: bool, theme: &'a Theme) -> Self {
-        Self { is_active, theme }
+    pub fn new(theme: &'a Theme) -> Self {
+        Self { theme }
     }
 }
 
@@ -68,11 +57,7 @@ impl Widget for PaneBorderWidget<'_> {
             return;
         }
 
-        let fg = if self.is_active {
-            self.theme.ui.pane_active_bg.to_ratatui()
-        } else {
-            self.theme.ui.pane_inactive_bg.to_ratatui()
-        };
+        let fg = self.theme.ui.pane_inactive_bg.to_ratatui();
         let style = Style::default().fg(fg);
 
         for y in area.y..area.y + area.height {
@@ -82,13 +67,12 @@ impl Widget for PaneBorderWidget<'_> {
 }
 
 pub struct PaneAccentLineWidget<'a> {
-    is_active: bool,
     theme: &'a Theme,
 }
 
 impl<'a> PaneAccentLineWidget<'a> {
-    pub fn new(is_active: bool, theme: &'a Theme) -> Self {
-        Self { is_active, theme }
+    pub fn new(theme: &'a Theme) -> Self {
+        Self { theme }
     }
 }
 
@@ -98,11 +82,7 @@ impl Widget for PaneAccentLineWidget<'_> {
             return;
         }
 
-        let fg = if self.is_active {
-            self.theme.ui.pane_active_bg.to_ratatui()
-        } else {
-            self.theme.ui.pane_inactive_bg.to_ratatui()
-        };
+        let fg = self.theme.ui.pane_inactive_bg.to_ratatui();
         let style = Style::default().fg(fg);
 
         for x in area.x..area.x + area.width {

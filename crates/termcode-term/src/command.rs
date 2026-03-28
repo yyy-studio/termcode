@@ -5,6 +5,9 @@ use termcode_core::selection::Selection;
 use termcode_core::transaction::Transaction;
 use termcode_view::editor::{Editor, EditorMode};
 
+use crate::display_width::char_index_to_display_col;
+use crate::ui::editor_view::line_number_width_styled;
+
 pub type CommandId = &'static str;
 pub type CommandHandler = fn(&mut Editor) -> anyhow::Result<()>;
 
@@ -620,6 +623,35 @@ pub fn sync_cursor_from_selection(editor: &mut Editor) {
         view.cursor = cursor_pos;
         view.ensure_cursor_visible(scroll_off);
     }
+    ensure_h_scroll(editor);
+}
+
+/// Adjust horizontal scroll so the cursor column is visible.
+fn ensure_h_scroll(editor: &mut Editor) {
+    let (cursor_display_col, code_width) = {
+        let doc = match editor.active_document() {
+            Some(d) => d,
+            None => return,
+        };
+        let view = match editor.active_view() {
+            Some(v) => v,
+            None => return,
+        };
+        let line = view.cursor.line;
+        if line >= doc.buffer.line_count() {
+            return;
+        }
+        let line_text: String = doc.buffer.line(line).into();
+        let line_text_trimmed = line_text.trim_end_matches(&['\n', '\r'][..]);
+        let display_col = char_index_to_display_col(line_text_trimmed, view.cursor.column);
+        let gutter_width =
+            line_number_width_styled(doc.buffer.line_count(), editor.config.line_numbers);
+        let code_w = (view.area_width).saturating_sub(gutter_width + 1) as usize;
+        (display_col, code_w)
+    };
+    if let Some(view) = editor.active_view_mut() {
+        view.ensure_cursor_visible_h(cursor_display_col, code_width);
+    }
 }
 
 /// Sync document selection from view cursor (after cursor movement).
@@ -641,6 +673,7 @@ pub fn sync_selection_from_cursor(editor: &mut Editor) {
             doc.selection = Selection::point(byte_pos);
         }
     }
+    ensure_h_scroll(editor);
 }
 
 /// Insert a character at the cursor position (called from App for Insert mode).

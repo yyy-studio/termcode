@@ -26,40 +26,37 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         editor.theme.ui.pane_focus_style,
     );
 
-    let current_path = editor
-        .active_document()
-        .and_then(|d| d.path.as_ref())
-        .and_then(|p| p.to_str());
-    let top_bar_widget = TopBarWidget::new(current_path, &editor.theme);
+    let top_bar_widget = TopBarWidget::new(&editor.theme);
     frame.render_widget(top_bar_widget, app_layout.top_bar);
 
     let is_sidebar_active = editor.mode == EditorMode::FileExplorer;
+    let is_editor_active = !is_sidebar_active;
 
     if let Some(sidebar_area) = app_layout.sidebar {
-        let explorer_widget = FileExplorerWidget::new(&editor.file_explorer, &editor.theme);
+        let explorer_widget =
+            FileExplorerWidget::new(&editor.file_explorer, &editor.theme, is_sidebar_active);
         frame.render_widget(explorer_widget, sidebar_area);
     }
 
     if let Some(title_area) = app_layout.sidebar_title {
         match editor.theme.ui.pane_focus_style {
             PaneFocusStyle::TitleBar => {
-                let w = PaneTitleWidget::new(is_sidebar_active, &editor.theme);
+                let w = PaneTitleWidget::new(&editor.theme);
                 frame.render_widget(w, title_area);
             }
             PaneFocusStyle::AccentLine => {
-                let w = PaneAccentLineWidget::new(is_sidebar_active, &editor.theme);
+                let w = PaneAccentLineWidget::new(&editor.theme);
                 frame.render_widget(w, title_area);
             }
             _ => {}
         }
     }
     if let Some(border_area) = app_layout.sidebar_border {
-        let w = PaneBorderWidget::new(is_sidebar_active, &editor.theme);
+        let w = PaneBorderWidget::new(&editor.theme);
         frame.render_widget(w, border_area);
     }
 
-    let is_editor_active = !is_sidebar_active;
-    let tab_bar_widget = TabBarWidget::new(&editor.tabs, &editor.theme, is_editor_active);
+    let tab_bar_widget = TabBarWidget::new(&editor.tabs, &editor.theme);
     frame.render_widget(tab_bar_widget, app_layout.tab_bar);
 
     if let (Some(view), Some(doc)) = (editor.active_view(), editor.active_document()) {
@@ -75,6 +72,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             editor.mode,
             search,
             editor.config.line_numbers,
+            is_editor_active,
         );
         frame.render_widget(editor_widget, app_layout.editor_area);
     }

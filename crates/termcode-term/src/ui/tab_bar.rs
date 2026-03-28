@@ -9,16 +9,11 @@ use termcode_view::tab::TabManager;
 pub struct TabBarWidget<'a> {
     tabs: &'a TabManager,
     theme: &'a Theme,
-    is_editor_active: bool,
 }
 
 impl<'a> TabBarWidget<'a> {
-    pub fn new(tabs: &'a TabManager, theme: &'a Theme, is_editor_active: bool) -> Self {
-        Self {
-            tabs,
-            theme,
-            is_editor_active,
-        }
+    pub fn new(tabs: &'a TabManager, theme: &'a Theme) -> Self {
+        Self { tabs, theme }
     }
 }
 
@@ -32,11 +27,7 @@ impl Widget for TabBarWidget<'_> {
         let inactive_fg = self.theme.ui.line_number.to_ratatui();
         let inactive_style = Style::default().fg(inactive_fg).bg(inactive_bg);
 
-        let empty_bg = if self.is_editor_active {
-            self.theme.ui.pane_active_bg.to_ratatui()
-        } else {
-            self.theme.ui.pane_inactive_bg.to_ratatui()
-        };
+        let empty_bg = self.theme.ui.tab_inactive_bg.to_ratatui();
         let empty_style = Style::default().bg(empty_bg);
         for x in area.x..area.x + area.width {
             buf[(x, area.y)].set_char(' ').set_style(empty_style);

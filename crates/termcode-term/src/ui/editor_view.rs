@@ -21,6 +21,25 @@ pub struct EditorViewWidget<'a> {
     mode: EditorMode,
     search: Option<&'a SearchState>,
     line_number_style: LineNumberStyle,
+    is_active: bool,
+}
+
+/// Blend a color over a background at the given opacity (0.0–1.0).
+fn blend_color(
+    fg: ratatui::style::Color,
+    bg: ratatui::style::Color,
+    alpha: f32,
+) -> ratatui::style::Color {
+    match (fg, bg) {
+        (ratatui::style::Color::Rgb(fr, fg_g, fb), ratatui::style::Color::Rgb(br, bg_g, bb)) => {
+            ratatui::style::Color::Rgb(
+                (fr as f32 * alpha + br as f32 * (1.0 - alpha)) as u8,
+                (fg_g as f32 * alpha + bg_g as f32 * (1.0 - alpha)) as u8,
+                (fb as f32 * alpha + bb as f32 * (1.0 - alpha)) as u8,
+            )
+        }
+        _ => fg,
+    }
 }
 
 impl<'a> EditorViewWidget<'a> {
@@ -31,6 +50,7 @@ impl<'a> EditorViewWidget<'a> {
         mode: EditorMode,
         search: Option<&'a SearchState>,
         line_number_style: LineNumberStyle,
+        is_active: bool,
     ) -> Self {
         Self {
             doc,
@@ -39,6 +59,7 @@ impl<'a> EditorViewWidget<'a> {
             mode,
             search,
             line_number_style,
+            is_active,
         }
     }
 }
@@ -184,7 +205,13 @@ impl Widget for EditorViewWidget<'_> {
             }
 
             if is_cursor_line {
-                let cursor_line_bg = self.theme.ui.cursor_line_bg.to_ratatui();
+                let raw_cursor_line_bg = self.theme.ui.cursor_line_bg.to_ratatui();
+                let editor_bg = self.theme.ui.background.to_ratatui();
+                let cursor_line_bg = if self.is_active {
+                    raw_cursor_line_bg
+                } else {
+                    blend_color(raw_cursor_line_bg, editor_bg, 0.2)
+                };
                 for cs in &mut char_styles[..line_bytes.len()] {
                     *cs = cs.bg(cursor_line_bg);
                 }
@@ -226,7 +253,7 @@ impl Widget for EditorViewWidget<'_> {
                 }
             }
 
-            if is_cursor_line {
+            if is_cursor_line && self.is_active {
                 let cursor_display_col =
                     char_index_to_display_col(line_text, self.view.cursor.column) as u16;
                 if cursor_display_col >= left_col as u16 {

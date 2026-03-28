@@ -52,6 +52,24 @@ impl View {
         }
     }
 
+    /// Ensure the cursor is horizontally visible, adjusting left_col.
+    /// `cursor_display_col` is the cursor's display column (accounting for wide chars/tabs).
+    /// `code_width` is the visible code area width (excluding gutter).
+    pub fn ensure_cursor_visible_h(&mut self, cursor_display_col: usize, code_width: usize) {
+        if code_width == 0 {
+            return;
+        }
+        let margin = 4usize.min(code_width.saturating_sub(1));
+        // Scroll left if cursor is before visible area
+        if cursor_display_col < self.scroll.left_col + margin {
+            self.scroll.left_col = cursor_display_col.saturating_sub(margin);
+        }
+        // Scroll right if cursor is past visible area
+        if cursor_display_col + margin >= self.scroll.left_col + code_width {
+            self.scroll.left_col = (cursor_display_col + margin + 1).saturating_sub(code_width);
+        }
+    }
+
     /// Scroll down by a number of lines.
     pub fn scroll_down(&mut self, lines: usize, max_line: usize) {
         let max_top = max_line.saturating_sub(self.area_height as usize);
