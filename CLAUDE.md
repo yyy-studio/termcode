@@ -102,6 +102,6 @@ Six modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `Command
 - LSP `didChange` must be sent after every document mutation (not just typed chars — also backspace, delete, undo, redo, search-replace).
 - `Document.version` must be incremented on every mutation including undo/redo (LSP requires monotonically increasing versions).
 - Atomic file save: write to tempfile, then rename. Implemented in `Buffer::save_to_file()`.
-- `Ctrl+C` is context-dependent: copy if selection exists, quit if empty. Double-press within 500ms always quits. `Ctrl+Q` is unconditional quit.
+- `Ctrl+C` is copy-only (no quit behavior). `Ctrl+Q` is the sole quit command.
 - Overlay text inputs track `cursor_pos` as character index, converted to byte index via `char_to_byte_index()` before `String::insert()/remove()`.
 - Search `find_matches()` uses case-insensitive literal matching on `&str` (not `&Rope`). Caller converts Rope to String. Matches are non-overlapping. Replace operations apply in reverse byte-offset order.

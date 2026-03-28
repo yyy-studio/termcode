@@ -168,7 +168,7 @@ Once the editor is open:
 4. Press `i` to enter Insert mode and begin typing.
 5. Press `Esc` to return to Normal mode.
 6. Press `Ctrl+S` to save the current file.
-7. Press `Ctrl+Q` or `Ctrl+C` (without a selection) to quit.
+7. Press `Ctrl+Q` to quit.
 
 ---
 
@@ -418,23 +418,23 @@ When pressing `h`/Left on a collapsed directory or a file, the selection moves t
 
 These work in every mode:
 
-| Key            | Command ID            | Action                                                  |
-| -------------- | --------------------- | ------------------------------------------------------- |
-| `Ctrl+Q`       | _(built-in)_          | Quit the editor                                         |
-| `Ctrl+C`       | `clipboard.copy`      | Copy selection (or quit if no selection / double-press) |
-| `Ctrl+S`       | `file.save`           | Save the current file                                   |
-| `Ctrl+B`       | `view.toggle_sidebar` | Toggle sidebar / enter File Explorer mode               |
-| `Ctrl+F`       | `search.open`         | Open search                                             |
-| `Ctrl+H`       | `search.open_replace` | Open search and replace                                 |
-| `Ctrl+P`       | `fuzzy.open`          | Open fuzzy file finder                                  |
-| `Ctrl+Shift+P` | `palette.open`        | Open command palette                                    |
-| `Alt+Right`    | `tab.next`            | Switch to next tab                                      |
-| `Alt+Left`     | `tab.prev`            | Switch to previous tab                                  |
-| `Ctrl+W`       | _(built-in)_          | Close current tab                                       |
-| `Ctrl+Z`       | `edit.undo`           | Undo                                                    |
-| `Ctrl+Y`       | `edit.redo`           | Redo                                                    |
-| `Ctrl+V`       | `clipboard.paste`     | Paste from system clipboard                             |
-| `Ctrl+X`       | `clipboard.cut`       | Cut selection to system clipboard                       |
+| Key            | Command ID            | Action                                    |
+| -------------- | --------------------- | ----------------------------------------- |
+| `Ctrl+Q`       | _(built-in)_          | Quit the editor                           |
+| `Ctrl+C`       | `clipboard.copy`      | Copy selection to system clipboard        |
+| `Ctrl+S`       | `file.save`           | Save the current file                     |
+| `Ctrl+B`       | `view.toggle_sidebar` | Toggle sidebar / enter File Explorer mode |
+| `Ctrl+F`       | `search.open`         | Open search                               |
+| `Ctrl+H`       | `search.open_replace` | Open search and replace                   |
+| `Ctrl+P`       | `fuzzy.open`          | Open fuzzy file finder                    |
+| `Ctrl+Shift+P` | `palette.open`        | Open command palette                      |
+| `Alt+Right`    | `tab.next`            | Switch to next tab                        |
+| `Alt+Left`     | `tab.prev`            | Switch to previous tab                    |
+| `Ctrl+W`       | _(built-in)_          | Close current tab                         |
+| `Ctrl+Z`       | `edit.undo`           | Undo                                      |
+| `Ctrl+Y`       | `edit.redo`           | Redo                                      |
+| `Ctrl+V`       | `clipboard.paste`     | Paste from system clipboard               |
+| `Ctrl+X`       | `clipboard.cut`       | Cut selection to system clipboard         |
 
 ### Normal Mode Keybindings
 
@@ -589,11 +589,11 @@ After making a selection, you can:
 
 termcode integrates with the system clipboard via the `arboard` library:
 
-| Operation | Keybinding | Behavior                                                                                                                                                |
-| --------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Copy      | `Ctrl+C`   | Copies the selected text to the system clipboard. If no selection exists, quits the editor (acts as interrupt). Double-press within 500ms always quits. |
-| Cut       | `Ctrl+X`   | Copies the selected text to the system clipboard and deletes it from the document.                                                                      |
-| Paste     | `Ctrl+V`   | Inserts text from the system clipboard at the cursor position.                                                                                          |
+| Operation | Keybinding | Behavior                                                                           |
+| --------- | ---------- | ---------------------------------------------------------------------------------- |
+| Copy      | `Ctrl+C`   | Copies the selected text to the system clipboard.                                  |
+| Cut       | `Ctrl+X`   | Copies the selected text to the system clipboard and deletes it from the document. |
+| Paste     | `Ctrl+V`   | Inserts text from the system clipboard at the cursor position.                     |
 
 ### Saving Files
 
@@ -1355,7 +1355,7 @@ Each scope style supports the following properties:
 
 ### Auto-Save on Exit
 
-When you quit termcode (via `Ctrl+Q` or `Ctrl+C`), the current session state is automatically saved. This includes all open tabs and their cursor positions.
+When you quit termcode (via `Ctrl+Q`), the current session state is automatically saved. This includes all open tabs and their cursor positions.
 
 ### Auto-Restore on Startup
 

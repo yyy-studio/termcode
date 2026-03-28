@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,7 +22,7 @@ use termcode_view::file_explorer::FileNodeKind;
 
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
-use crate::command::{CommandRegistry, insert_char, register_builtin_commands, rerun_search};
+use crate::command::{insert_char, register_builtin_commands, rerun_search, CommandRegistry};
 use crate::event::{AppEvent, EventHandler};
 use crate::input::InputMapper;
 use crate::layout;
@@ -41,8 +40,6 @@ pub struct App {
     lsp_event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Trigger characters per language, cached from server capabilities.
     lsp_trigger_chars: HashMap<String, Vec<String>>,
-    /// Timestamp of last Ctrl+C press for double-press quit safety.
-    last_ctrl_c_time: Option<Instant>,
     /// Last known terminal size, updated each frame for accurate mouse layout.
     terminal_size: (u16, u16),
     /// Whether mouse capture was enabled at startup (for clean teardown).
@@ -88,7 +85,6 @@ impl App {
             lsp_bridge,
             lsp_event_rx,
             lsp_trigger_chars: HashMap::new(),
-            last_ctrl_c_time: None,
             terminal_size: (80, 24),
             mouse_enabled,
         }
@@ -334,34 +330,13 @@ impl App {
             return;
         }
 
-        // Ctrl+C: copy if selection exists, quit if empty.
-        // Double-press within 500ms always quits.
+        // Ctrl+C: copy selection to clipboard.
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
-            let now = Instant::now();
-            let double_press = self
-                .last_ctrl_c_time
-                .is_some_and(|t| now.duration_since(t).as_millis() < 500);
-            self.last_ctrl_c_time = Some(now);
-
-            if double_press {
-                self.should_quit = true;
-                return;
-            }
-
-            let has_selection = self
-                .editor
-                .active_document()
-                .is_some_and(|doc| !doc.selection.primary().is_empty());
-
-            if has_selection {
-                if let Err(e) = self
-                    .command_registry
-                    .execute("clipboard.copy", &mut self.editor)
-                {
-                    self.editor.status_message = Some(format!("Error: {e}"));
-                }
-            } else {
-                self.should_quit = true;
+            if let Err(e) = self
+                .command_registry
+                .execute("clipboard.copy", &mut self.editor)
+            {
+                self.editor.status_message = Some(format!("Error: {e}"));
             }
             return;
         }
