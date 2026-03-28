@@ -36,6 +36,19 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
 }
 
 fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) -> MouseAction {
+    if let Some(sidebar_title) = layout.sidebar_title {
+        if rect_contains(&sidebar_title, x, y) {
+            editor.switch_mode(EditorMode::FileExplorer);
+            return MouseAction::None;
+        }
+    }
+    if let Some(sidebar_border) = layout.sidebar_border {
+        if rect_contains(&sidebar_border, x, y) {
+            editor.switch_mode(EditorMode::FileExplorer);
+            return MouseAction::None;
+        }
+    }
+
     if let Some(sidebar) = layout.sidebar {
         if rect_contains(&sidebar, x, y) {
             return handle_sidebar_click(editor, x, y, &sidebar);
@@ -308,5 +321,78 @@ mod tests {
         assert!(rect_contains(&rect, 29, 29));
         assert!(!rect_contains(&rect, 30, 30));
         assert!(!rect_contains(&rect, 9, 10));
+    }
+
+    use ratatui::layout::Rect;
+
+    fn make_editor() -> Editor {
+        use termcode_core::config_types::EditorConfig;
+        use termcode_syntax::language::LanguageRegistry;
+        use termcode_theme::theme::Theme;
+        Editor::new(
+            Theme::default(),
+            EditorConfig::default(),
+            LanguageRegistry::new(),
+            None,
+        )
+    }
+
+    fn layout_with_title() -> AppLayout {
+        AppLayout {
+            top_bar: Rect::new(0, 0, 80, 1),
+            sidebar: Some(Rect::new(0, 2, 20, 21)),
+            sidebar_title: Some(Rect::new(0, 1, 20, 1)),
+            sidebar_border: None,
+            tab_bar: Rect::new(20, 1, 60, 1),
+            editor_area: Rect::new(20, 2, 60, 21),
+            status_bar: Rect::new(0, 23, 80, 1),
+        }
+    }
+
+    fn layout_with_border() -> AppLayout {
+        AppLayout {
+            top_bar: Rect::new(0, 0, 80, 1),
+            sidebar: Some(Rect::new(0, 1, 19, 22)),
+            sidebar_title: None,
+            sidebar_border: Some(Rect::new(19, 1, 1, 22)),
+            tab_bar: Rect::new(20, 1, 60, 1),
+            editor_area: Rect::new(20, 2, 60, 21),
+            status_bar: Rect::new(0, 23, 80, 1),
+        }
+    }
+
+    #[test]
+    fn click_sidebar_title_switches_to_file_explorer() {
+        let mut editor = make_editor();
+        editor.switch_mode(EditorMode::Normal);
+        let layout = layout_with_title();
+        let action = handle_left_click(&mut editor, 5, 1, &layout);
+        assert!(matches!(action, MouseAction::None));
+        assert_eq!(editor.mode, EditorMode::FileExplorer);
+    }
+
+    #[test]
+    fn click_sidebar_border_switches_to_file_explorer() {
+        let mut editor = make_editor();
+        editor.switch_mode(EditorMode::Normal);
+        let layout = layout_with_border();
+        let action = handle_left_click(&mut editor, 19, 5, &layout);
+        assert!(matches!(action, MouseAction::None));
+        assert_eq!(editor.mode, EditorMode::FileExplorer);
+    }
+
+    #[test]
+    fn click_sidebar_content_dispatches_to_sidebar_handler() {
+        let mut editor = make_editor();
+        editor.switch_mode(EditorMode::Normal);
+        let layout = layout_with_title();
+        let action = handle_left_click(&mut editor, 5, 3, &layout);
+        // sidebar content click goes to handle_sidebar_click -> OpenExplorerItem or None
+        // (tree is empty so returns None, but mode switches to FileExplorer)
+        assert!(matches!(
+            action,
+            MouseAction::None | MouseAction::OpenExplorerItem(_)
+        ));
+        assert_eq!(editor.mode, EditorMode::FileExplorer);
     }
 }

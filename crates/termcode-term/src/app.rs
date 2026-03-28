@@ -130,6 +130,7 @@ impl App {
                     area,
                     self.editor.file_explorer.visible,
                     self.editor.file_explorer.width,
+                    self.editor.theme.ui.pane_focus_style,
                 );
                 if let Some(view) = self.editor.active_view_mut() {
                     view.area_height = app_layout.editor_area.height;
@@ -239,6 +240,7 @@ impl App {
             area,
             self.editor.file_explorer.visible,
             self.editor.file_explorer.width,
+            self.editor.theme.ui.pane_focus_style,
         );
 
         match mouse::handle_mouse(&mut self.editor, event, &app_layout) {

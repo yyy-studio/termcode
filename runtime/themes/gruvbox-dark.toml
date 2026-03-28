@@ -45,6 +45,11 @@ info = "bright_blue"
 hint = "bright_aqua"
 search_match = "bright_yellow"
 search_match_active = "bright_orange"
+pane_focus_style = "title_bar"
+pane_active_fg = "bg"
+pane_active_bg = "bright_blue"
+pane_inactive_fg = "gray"
+pane_inactive_bg = "bg0_h"
 
 [scopes]
 "attribute" = { fg = "bright_aqua" }

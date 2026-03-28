@@ -2,6 +2,8 @@ use ratatui::Frame;
 
 use termcode_view::editor::{Editor, EditorMode};
 
+use termcode_theme::theme::PaneFocusStyle;
+
 use crate::layout::{self, AppLayout};
 use crate::ui::command_palette::CommandPaletteWidget;
 use crate::ui::completion::CompletionWidget;
@@ -9,6 +11,7 @@ use crate::ui::editor_view::EditorViewWidget;
 use crate::ui::file_explorer::FileExplorerWidget;
 use crate::ui::fuzzy_finder::FuzzyFinderWidget;
 use crate::ui::hover::HoverWidget;
+use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
 use crate::ui::search::SearchOverlayWidget;
 use crate::ui::status_bar::StatusBarWidget;
 use crate::ui::tab_bar::TabBarWidget;
@@ -20,6 +23,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         area,
         editor.file_explorer.visible,
         editor.file_explorer.width,
+        editor.theme.ui.pane_focus_style,
     );
 
     let current_path = editor
@@ -29,12 +33,33 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     let top_bar_widget = TopBarWidget::new(current_path, &editor.theme);
     frame.render_widget(top_bar_widget, app_layout.top_bar);
 
+    let is_sidebar_active = editor.mode == EditorMode::FileExplorer;
+
     if let Some(sidebar_area) = app_layout.sidebar {
         let explorer_widget = FileExplorerWidget::new(&editor.file_explorer, &editor.theme);
         frame.render_widget(explorer_widget, sidebar_area);
     }
 
-    let tab_bar_widget = TabBarWidget::new(&editor.tabs, &editor.theme);
+    if let Some(title_area) = app_layout.sidebar_title {
+        match editor.theme.ui.pane_focus_style {
+            PaneFocusStyle::TitleBar => {
+                let w = PaneTitleWidget::new(is_sidebar_active, &editor.theme);
+                frame.render_widget(w, title_area);
+            }
+            PaneFocusStyle::AccentLine => {
+                let w = PaneAccentLineWidget::new(is_sidebar_active, &editor.theme);
+                frame.render_widget(w, title_area);
+            }
+            _ => {}
+        }
+    }
+    if let Some(border_area) = app_layout.sidebar_border {
+        let w = PaneBorderWidget::new(is_sidebar_active, &editor.theme);
+        frame.render_widget(w, border_area);
+    }
+
+    let is_editor_active = !is_sidebar_active;
+    let tab_bar_widget = TabBarWidget::new(&editor.tabs, &editor.theme, is_editor_active);
     frame.render_widget(tab_bar_widget, app_layout.tab_bar);
 
     if let (Some(view), Some(doc)) = (editor.active_view(), editor.active_document()) {

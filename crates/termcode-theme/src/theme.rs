@@ -3,6 +3,15 @@ use std::collections::HashMap;
 use crate::palette::Palette;
 use crate::style::{Color, Style};
 
+/// Pane focus indicator style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneFocusStyle {
+    #[default]
+    TitleBar,
+    Border,
+    AccentLine,
+}
+
 /// UI color slots for non-syntax elements.
 #[derive(Debug, Clone)]
 pub struct UiColors {
@@ -26,6 +35,11 @@ pub struct UiColors {
     pub hint: Color,
     pub search_match: Color,
     pub search_match_active: Color,
+    pub pane_focus_style: PaneFocusStyle,
+    pub pane_active_fg: Color,
+    pub pane_active_bg: Color,
+    pub pane_inactive_fg: Color,
+    pub pane_inactive_bg: Color,
 }
 
 impl Default for UiColors {
@@ -53,6 +67,11 @@ impl Default for UiColors {
             hint: Color::Rgb(86, 182, 194),
             search_match: Color::Rgb(229, 192, 123),
             search_match_active: Color::Rgb(209, 154, 102),
+            pane_focus_style: PaneFocusStyle::default(),
+            pane_active_fg: bg,
+            pane_active_bg: Color::Rgb(97, 175, 239),
+            pane_inactive_fg: Color::Rgb(75, 82, 99),
+            pane_inactive_bg: Color::Rgb(33, 37, 43),
         }
     }
 }

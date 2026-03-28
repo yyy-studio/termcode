@@ -50,6 +50,11 @@ info = "blue"
 hint = "teal"
 search_match = "yellow"
 search_match_active = "peach"
+pane_focus_style = "title_bar"
+pane_active_fg = "base"
+pane_active_bg = "blue"
+pane_inactive_fg = "overlay0"
+pane_inactive_bg = "mantle"
 
 [scopes]
 "attribute" = { fg = "yellow" }

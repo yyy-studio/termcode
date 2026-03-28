@@ -9,11 +9,16 @@ use termcode_view::tab::TabManager;
 pub struct TabBarWidget<'a> {
     tabs: &'a TabManager,
     theme: &'a Theme,
+    is_editor_active: bool,
 }
 
 impl<'a> TabBarWidget<'a> {
-    pub fn new(tabs: &'a TabManager, theme: &'a Theme) -> Self {
-        Self { tabs, theme }
+    pub fn new(tabs: &'a TabManager, theme: &'a Theme, is_editor_active: bool) -> Self {
+        Self {
+            tabs,
+            theme,
+            is_editor_active,
+        }
     }
 }
 
@@ -27,9 +32,14 @@ impl Widget for TabBarWidget<'_> {
         let inactive_fg = self.theme.ui.line_number.to_ratatui();
         let inactive_style = Style::default().fg(inactive_fg).bg(inactive_bg);
 
-        // Fill background with inactive style
+        let empty_bg = if self.is_editor_active {
+            self.theme.ui.pane_active_bg.to_ratatui()
+        } else {
+            self.theme.ui.pane_inactive_bg.to_ratatui()
+        };
+        let empty_style = Style::default().bg(empty_bg);
         for x in area.x..area.x + area.width {
-            buf[(x, area.y)].set_char(' ').set_style(inactive_style);
+            buf[(x, area.y)].set_char(' ').set_style(empty_style);
         }
 
         if self.tabs.tabs.is_empty() {
@@ -49,7 +59,6 @@ impl Widget for TabBarWidget<'_> {
                 break;
             }
 
-            // Separator between tabs
             if i > 0 && x < area.x + area.width {
                 buf[(x, area.y)].set_char('|').set_style(sep_style);
                 x += 1;
@@ -61,7 +70,6 @@ impl Widget for TabBarWidget<'_> {
                 inactive_style
             };
 
-            // Modified indicator + label
             let label = if tab.modified {
                 format!(" \u{2022} {} ", tab.label)
             } else {

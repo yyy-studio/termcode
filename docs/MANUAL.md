@@ -182,19 +182,21 @@ termcode's interface consists of five main regions arranged as follows:
 +---------------------------------------------------------------+
 | Top Bar (termcode title)                                      |
 +------------------+--------------------------------------------+
-|                  | Tab Bar: [ main.rs | lib.rs | config.toml ]|
-|   File Explorer  +--------------------------------------------+
-|   Sidebar        |                                            |
-|                  |  Line Numbers | Editor Area                |
-|   src/           |     1         | fn main() {               |
-|     main.rs      |     2         |     println!("hello");    |
-|     lib.rs       |     3         | }                         |
+|  EXPLORER        | Tab Bar: [ main.rs | lib.rs | config.toml ]|
++------------------+--------------------------------------------+
+|   File Explorer  |                                            |
+|   Sidebar        |  Line Numbers | Editor Area                |
+|                  |     1         | fn main() {               |
+|   src/           |     2         |     println!("hello");    |
+|     main.rs      |     3         | }                         |
+|     lib.rs       |               |                           |
 |   Cargo.toml     |               |                           |
-|                  |               |                           |
 +------------------+--------------------------------------------+
 | Status Bar: NORMAL | Ln 1, Col 0 | UTF-8 | rust | 0 errors  |
 +---------------------------------------------------------------+
 ```
+
+The active pane (sidebar or editor) is indicated by an accent-colored title bar. The sidebar shows an "EXPLORER" title bar, and the editor uses its tab bar. The active pane's title/tab bar is highlighted with an accent color, while the inactive pane's is dimmed. This pane focus style is configurable via the theme (see [Themes](#15-themes)).
 
 ### Top Bar
 
@@ -204,6 +206,7 @@ The top bar spans the full width of the terminal and displays the application na
 
 The sidebar occupies the left portion of the screen (default width: 30 columns) and displays a tree view of your project's files and directories. Key features:
 
+- **Title bar**: The sidebar has an "EXPLORER" title bar at the top. When the sidebar is the active pane, the title bar is highlighted with the theme's accent color; when inactive, it is dimmed.
 - **Toggle visibility**: Press `Ctrl+B` to show/hide the sidebar. When shown, focus moves to the file explorer. Pressing `Ctrl+B` again when already focused hides it.
 - **Navigation**: Use `j`/`k` or Up/Down arrows to move the selection.
 - **Expand/Collapse**: Press `l`/Right to expand a directory, `h`/Left to collapse it. Press `Enter` on a directory to toggle expansion.
@@ -217,6 +220,7 @@ The tab bar appears below the top bar (or at the very top if the top bar is hidd
 
 - **Active tab**: Highlighted with a distinct background color matching the editor background.
 - **Inactive tabs**: Shown with a darker background.
+- **Pane focus indicator**: The empty area after the last tab reflects the pane focus state -- accent-colored when the editor pane is active, dimmed when the sidebar is active.
 - **Modified indicator**: A bullet character appears before the filename when the file has unsaved changes (e.g., `. main.rs`).
 - **Switch tabs**: Press `Alt+Right` / `Alt+Left` to cycle through tabs, or click on a tab with the mouse.
 - **Close tab**: Press `Ctrl+W` to close the current tab.
@@ -1211,6 +1215,12 @@ info = "blue"
 hint = "cyan"
 search_match = "yellow"
 search_match_active = "#d19a66"
+# Pane focus indicator (all optional)
+pane_focus_style = "title_bar"   # "title_bar" | "border" | "accent_line"
+pane_active_fg = "bg"
+pane_active_bg = "blue"
+pane_inactive_fg = "gutter"
+pane_inactive_bg = "#21252b"
 
 [scopes]
 # Syntax highlighting scopes.
@@ -1233,6 +1243,18 @@ search_match_active = "#d19a66"
 3. The filename (without `.toml` extension) becomes the theme identifier used in `config.toml` and the theme palette.
 4. Switch to your theme by setting `theme = "my-theme-name"` in `config.toml`, or by using the command palette at runtime.
 
+### Pane Focus Styles
+
+The pane focus indicator shows which pane (sidebar or editor) is currently active. The style is set via the `pane_focus_style` field in the `[ui]` section:
+
+| Style         | Description                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| `title_bar`   | Default. Sidebar shows an "EXPLORER" title bar. Editor uses its tab bar. Active pane's bar is accent-colored. |
+| `border`      | A 1-column vertical border on the sidebar's right edge. Active border is accent-colored.                      |
+| `accent_line` | A 1-row horizontal accent line at the top of the sidebar. Active line is accent-colored.                      |
+
+The active/inactive colors are controlled by `pane_active_fg`, `pane_active_bg`, `pane_inactive_fg`, and `pane_inactive_bg`. All pane focus fields are optional -- omitting them uses sensible defaults (blue accent on dark background).
+
 ### Runtime Theme Switching
 
 You can switch themes without restarting the editor:
@@ -1246,28 +1268,33 @@ You can switch themes without restarting the editor:
 
 The `[ui]` section supports the following color slots:
 
-| Slot                  | Description                                   |
-| --------------------- | --------------------------------------------- |
-| `background`          | Main editor background color                  |
-| `foreground`          | Default text color                            |
-| `cursor`              | Cursor color                                  |
-| `selection`           | Background color for selected text            |
-| `cursor_line_bg`      | Background highlight for the current line     |
-| `line_number`         | Color for non-active line numbers             |
-| `line_number_active`  | Color for the current line number             |
-| `status_bar_bg`       | Status bar background                         |
-| `status_bar_fg`       | Status bar text color                         |
-| `tab_active_bg`       | Active tab background                         |
-| `tab_inactive_bg`     | Inactive tab background                       |
-| `sidebar_bg`          | File explorer sidebar background              |
-| `sidebar_fg`          | File explorer sidebar text color              |
-| `border`              | Border/separator color                        |
-| `error`               | Error diagnostic color                        |
-| `warning`             | Warning diagnostic color                      |
-| `info`                | Info diagnostic color                         |
-| `hint`                | Hint diagnostic color                         |
-| `search_match`        | Background color for search matches           |
-| `search_match_active` | Background color for the current search match |
+| Slot                  | Description                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `background`          | Main editor background color                                                        |
+| `foreground`          | Default text color                                                                  |
+| `cursor`              | Cursor color                                                                        |
+| `selection`           | Background color for selected text                                                  |
+| `cursor_line_bg`      | Background highlight for the current line                                           |
+| `line_number`         | Color for non-active line numbers                                                   |
+| `line_number_active`  | Color for the current line number                                                   |
+| `status_bar_bg`       | Status bar background                                                               |
+| `status_bar_fg`       | Status bar text color                                                               |
+| `tab_active_bg`       | Active tab background                                                               |
+| `tab_inactive_bg`     | Inactive tab background                                                             |
+| `sidebar_bg`          | File explorer sidebar background                                                    |
+| `sidebar_fg`          | File explorer sidebar text color                                                    |
+| `border`              | Border/separator color                                                              |
+| `error`               | Error diagnostic color                                                              |
+| `warning`             | Warning diagnostic color                                                            |
+| `info`                | Info diagnostic color                                                               |
+| `hint`                | Hint diagnostic color                                                               |
+| `search_match`        | Background color for search matches                                                 |
+| `search_match_active` | Background color for the current search match                                       |
+| `pane_focus_style`    | Pane focus indicator style: `"title_bar"` (default), `"border"`, or `"accent_line"` |
+| `pane_active_fg`      | Foreground color for the active pane indicator                                      |
+| `pane_active_bg`      | Background color for the active pane indicator                                      |
+| `pane_inactive_fg`    | Foreground color for the inactive pane indicator                                    |
+| `pane_inactive_bg`    | Background color for the inactive pane indicator                                    |
 
 ### All Syntax Scope Names
 
@@ -1384,6 +1411,8 @@ Left-clicking on an item in the file explorer sidebar:
 - Selects the clicked item.
 - Switches to File Explorer mode.
 - Opens the item (if a file, it opens in the editor; if a directory, it toggles expansion).
+
+Clicking on the sidebar's title bar or border (when using `title_bar` or `border` pane focus styles) switches focus to the file explorer without selecting or opening any item.
 
 ### Scroll Wheel
 

@@ -5,6 +5,7 @@ pub mod file_explorer;
 pub mod fuzzy_finder;
 pub mod hover;
 pub mod overlay;
+pub mod pane_focus;
 pub mod search;
 pub mod status_bar;
 pub mod tab_bar;

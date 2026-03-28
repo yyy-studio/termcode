@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::palette::Palette;
 use crate::style::{Color, Style, StyleDef};
-use crate::theme::{Theme, UiColors};
+use crate::theme::{PaneFocusStyle, Theme, UiColors};
 
 #[derive(Error, Debug)]
 pub enum ThemeError {
@@ -62,6 +62,11 @@ struct UiDef {
     hint: Option<String>,
     search_match: Option<String>,
     search_match_active: Option<String>,
+    pane_focus_style: Option<String>,
+    pane_active_fg: Option<String>,
+    pane_active_bg: Option<String>,
+    pane_inactive_fg: Option<String>,
+    pane_inactive_bg: Option<String>,
 }
 
 /// Load a theme from a TOML file.
@@ -90,6 +95,18 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
             .unwrap_or(fallback)
     };
 
+    let pane_focus_style = file
+        .ui
+        .pane_focus_style
+        .as_deref()
+        .map(|s| match s.to_lowercase().as_str() {
+            "title_bar" => PaneFocusStyle::TitleBar,
+            "border" => PaneFocusStyle::Border,
+            "accent_line" => PaneFocusStyle::AccentLine,
+            _ => PaneFocusStyle::TitleBar,
+        })
+        .unwrap_or_default();
+
     let ui = UiColors {
         background: resolve(&file.ui.background, defaults.background),
         foreground: resolve(&file.ui.foreground, defaults.foreground),
@@ -111,6 +128,11 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
         hint: resolve(&file.ui.hint, defaults.hint),
         search_match: resolve(&file.ui.search_match, defaults.search_match),
         search_match_active: resolve(&file.ui.search_match_active, defaults.search_match_active),
+        pane_focus_style,
+        pane_active_fg: resolve(&file.ui.pane_active_fg, defaults.pane_active_fg),
+        pane_active_bg: resolve(&file.ui.pane_active_bg, defaults.pane_active_bg),
+        pane_inactive_fg: resolve(&file.ui.pane_inactive_fg, defaults.pane_inactive_fg),
+        pane_inactive_bg: resolve(&file.ui.pane_inactive_bg, defaults.pane_inactive_bg),
     };
 
     // Resolve syntax scopes
@@ -161,5 +183,62 @@ mod tests {
         let theme = parse_theme(toml).expect("catppuccin-mocha should parse");
         assert_eq!(theme.name, "Catppuccin Mocha");
         assert!(!theme.scopes.is_empty());
+    }
+
+    #[test]
+    fn parse_explicit_pane_focus_style() {
+        let toml = r##"
+[meta]
+name = "test"
+[palette]
+red = "#ff0000"
+blue = "#0000ff"
+[ui]
+pane_focus_style = "border"
+pane_active_fg = "red"
+pane_active_bg = "blue"
+"##;
+        let theme = parse_theme(toml).expect("should parse");
+        assert_eq!(theme.ui.pane_focus_style, PaneFocusStyle::Border);
+        assert_eq!(theme.ui.pane_active_fg, Color::Rgb(255, 0, 0));
+        assert_eq!(theme.ui.pane_active_bg, Color::Rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn parse_missing_pane_fields_uses_defaults() {
+        let toml = "[meta]\nname = \"test\"\n";
+        let theme = parse_theme(toml).expect("should parse");
+        let defaults = UiColors::default();
+        assert_eq!(theme.ui.pane_focus_style, PaneFocusStyle::TitleBar);
+        assert_eq!(theme.ui.pane_active_fg, defaults.pane_active_fg);
+        assert_eq!(theme.ui.pane_active_bg, defaults.pane_active_bg);
+        assert_eq!(theme.ui.pane_inactive_fg, defaults.pane_inactive_fg);
+        assert_eq!(theme.ui.pane_inactive_bg, defaults.pane_inactive_bg);
+    }
+
+    #[test]
+    fn parse_unknown_pane_focus_style_fallback() {
+        let toml = r##"
+[meta]
+name = "test"
+[ui]
+pane_focus_style = "unknown_value"
+"##;
+        let theme = parse_theme(toml).expect("should parse");
+        assert_eq!(theme.ui.pane_focus_style, PaneFocusStyle::TitleBar);
+    }
+
+    #[test]
+    fn parse_pane_focus_style_case_insensitive() {
+        for (input, expected) in [
+            ("Title_Bar", PaneFocusStyle::TitleBar),
+            ("BORDER", PaneFocusStyle::Border),
+            ("Accent_Line", PaneFocusStyle::AccentLine),
+            ("title_bar", PaneFocusStyle::TitleBar),
+        ] {
+            let toml = format!("[meta]\nname = \"test\"\n[ui]\npane_focus_style = \"{input}\"\n");
+            let theme = parse_theme(&toml).expect("should parse");
+            assert_eq!(theme.ui.pane_focus_style, expected, "input: {input}");
+        }
     }
 }
