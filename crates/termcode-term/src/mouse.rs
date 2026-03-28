@@ -160,10 +160,16 @@ fn handle_sidebar_click(
         return MouseAction::None;
     }
 
+    let already_selected = editor.file_explorer.selected == target_index;
     editor.file_explorer.selected = target_index;
     editor.switch_mode(EditorMode::FileExplorer);
 
-    MouseAction::OpenExplorerItem(target_index)
+    // First click selects, second click on same item opens
+    if already_selected {
+        MouseAction::OpenExplorerItem(target_index)
+    } else {
+        MouseAction::None
+    }
 }
 
 fn handle_tab_bar_click(
