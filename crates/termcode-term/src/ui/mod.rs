@@ -1,0 +1,11 @@
+pub mod command_palette;
+pub mod completion;
+pub mod editor_view;
+pub mod file_explorer;
+pub mod fuzzy_finder;
+pub mod hover;
+pub mod overlay;
+pub mod search;
+pub mod status_bar;
+pub mod tab_bar;
+pub mod top_bar;

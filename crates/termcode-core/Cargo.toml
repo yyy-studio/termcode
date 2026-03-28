@@ -1,0 +1,14 @@
+[package]
+name = "termcode-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ropey.workspace = true
+encoding_rs.workspace = true
+serde = { workspace = true }
+thiserror.workspace = true
+anyhow.workspace = true
+tempfile.workspace = true

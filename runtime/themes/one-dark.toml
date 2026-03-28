@@ -1,0 +1,68 @@
+[meta]
+name = "One Dark"
+
+[palette]
+bg = "#282c34"
+fg = "#abb2bf"
+red = "#e06c75"
+green = "#98c379"
+yellow = "#e5c07b"
+blue = "#61afef"
+magenta = "#c678dd"
+cyan = "#56b6c2"
+gutter = "#4b5263"
+comment = "#5c6370"
+
+[ui]
+background = "bg"
+foreground = "fg"
+cursor = "#528bff"
+selection = "#3e4451"
+line_number = "gutter"
+line_number_active = "fg"
+status_bar_bg = "#21252b"
+status_bar_fg = "fg"
+tab_active_bg = "bg"
+tab_inactive_bg = "#21252b"
+sidebar_bg = "#21252b"
+sidebar_fg = "fg"
+border = "#181a1f"
+error = "red"
+warning = "yellow"
+info = "blue"
+hint = "cyan"
+search_match = "yellow"
+search_match_active = "#d19a66"
+
+[scopes]
+"attribute" = { fg = "yellow" }
+"comment" = { fg = "comment", italic = true }
+"constant" = { fg = "cyan" }
+"constant.numeric" = { fg = "yellow" }
+"constant.character" = { fg = "green" }
+"constant.character.escape" = { fg = "cyan" }
+"constructor" = { fg = "blue" }
+"function" = { fg = "blue" }
+"function.macro" = { fg = "magenta" }
+"function.builtin" = { fg = "cyan" }
+"keyword" = { fg = "magenta" }
+"keyword.control" = { fg = "magenta" }
+"keyword.control.return" = { fg = "magenta" }
+"keyword.control.import" = { fg = "magenta" }
+"keyword.operator" = { fg = "magenta" }
+"keyword.function" = { fg = "magenta" }
+"label" = { fg = "red" }
+"namespace" = { fg = "yellow" }
+"operator" = { fg = "cyan" }
+"punctuation" = { fg = "fg" }
+"punctuation.bracket" = { fg = "fg" }
+"punctuation.delimiter" = { fg = "fg" }
+"string" = { fg = "green" }
+"string.special" = { fg = "cyan" }
+"type" = { fg = "yellow" }
+"type.builtin" = { fg = "yellow" }
+"variable" = { fg = "red" }
+"variable.builtin" = { fg = "red" }
+"variable.parameter" = { fg = "red" }
+"tag" = { fg = "red" }
+"special" = { fg = "blue" }

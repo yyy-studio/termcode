@@ -1,0 +1,25 @@
+[package]
+name = "termcode-term"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+termcode-core = { workspace = true }
+termcode-syntax = { workspace = true }
+termcode-view = { workspace = true }
+termcode-theme = { workspace = true }
+termcode-config = { workspace = true }
+termcode-lsp = { workspace = true }
+ratatui.workspace = true
+tokio = { workspace = true }
+serde_json = { workspace = true }
+lsp-types = { workspace = true }
+crossterm.workspace = true
+arboard.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde = { workspace = true }
+unicode-width = { workspace = true }

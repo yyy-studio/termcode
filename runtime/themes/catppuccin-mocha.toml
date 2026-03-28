@@ -1,0 +1,85 @@
+[meta]
+name = "Catppuccin Mocha"
+
+[palette]
+base = "#1e1e2e"
+mantle = "#181825"
+crust = "#11111b"
+text = "#cdd6f4"
+subtext1 = "#bac2de"
+subtext0 = "#a6adc8"
+overlay2 = "#9399b2"
+overlay1 = "#7f849c"
+overlay0 = "#6c7086"
+surface2 = "#585b70"
+surface1 = "#45475a"
+surface0 = "#313244"
+red = "#f38ba8"
+maroon = "#eba0ac"
+peach = "#fab387"
+yellow = "#f9e2af"
+green = "#a6e3a1"
+teal = "#94e2d5"
+sky = "#89dceb"
+sapphire = "#74c7ec"
+blue = "#89b4fa"
+lavender = "#b4befe"
+mauve = "#cba6f7"
+pink = "#f5c2e7"
+flamingo = "#f2cdcd"
+rosewater = "#f5e0dc"
+
+[ui]
+background = "base"
+foreground = "text"
+cursor = "rosewater"
+selection = "surface1"
+cursor_line_bg = "surface0"
+line_number = "surface1"
+line_number_active = "lavender"
+status_bar_bg = "mantle"
+status_bar_fg = "text"
+tab_active_bg = "base"
+tab_inactive_bg = "mantle"
+sidebar_bg = "mantle"
+sidebar_fg = "text"
+border = "surface0"
+error = "red"
+warning = "yellow"
+info = "blue"
+hint = "teal"
+search_match = "yellow"
+search_match_active = "peach"
+
+[scopes]
+"attribute" = { fg = "yellow" }
+"comment" = { fg = "overlay0", italic = true }
+"constant" = { fg = "peach" }
+"constant.numeric" = { fg = "peach" }
+"constant.character" = { fg = "teal" }
+"constant.character.escape" = { fg = "pink" }
+"constructor" = { fg = "sapphire" }
+"function" = { fg = "blue" }
+"function.macro" = { fg = "mauve" }
+"function.builtin" = { fg = "peach" }
+"keyword" = { fg = "mauve" }
+"keyword.control" = { fg = "mauve" }
+"keyword.control.return" = { fg = "mauve" }
+"keyword.control.import" = { fg = "mauve" }
+"keyword.operator" = { fg = "sky" }
+"keyword.function" = { fg = "mauve" }
+"label" = { fg = "sapphire" }
+"namespace" = { fg = "yellow" }
+"operator" = { fg = "sky" }
+"punctuation" = { fg = "overlay2" }
+"punctuation.bracket" = { fg = "overlay2" }
+"punctuation.delimiter" = { fg = "overlay2" }
+"string" = { fg = "green" }
+"string.special" = { fg = "pink" }
+"type" = { fg = "yellow" }
+"type.builtin" = { fg = "yellow" }
+"variable" = { fg = "text" }
+"variable.builtin" = { fg = "red" }
+"variable.parameter" = { fg = "maroon" }
+"tag" = { fg = "blue" }
+"special" = { fg = "lavender" }

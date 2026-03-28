@@ -1,0 +1,21 @@
+# Keybinding overrides for termcode
+# Format: "key_combo" = "command_id"
+#
+# Key combo syntax:
+#   - Modifiers: ctrl, alt, shift (combined with +)
+#   - Keys: a-z, 0-9, enter, esc, backspace, delete, tab, up, down, left, right
+#           pageup, pagedown, home, end, f1-f12
+#   - Examples: "ctrl+s", "ctrl+shift+p", "alt+left", "f12", "enter"
+#
+# Available command IDs can be found in the command palette (Ctrl+Shift+P).
+# Invalid command names are logged and skipped.
+#
+# Sections: [global], [mode.normal], [mode.insert], [mode.file_explorer],
+#           [mode.search], [mode.fuzzy_finder], [mode.command_palette]
+#
+# Example:
+# [global]
+# "ctrl+d" = "goto.definition"
+#
+# [mode.normal]
+# "g" = "cursor.home"

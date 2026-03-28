@@ -1,0 +1,15 @@
+[package]
+name = "termcode-syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+termcode-core = { workspace = true }
+termcode-theme = { workspace = true }
+tree-sitter.workspace = true
+tree-sitter-highlight.workspace = true
+once_cell.workspace = true
+thiserror.workspace = true
+log.workspace = true
