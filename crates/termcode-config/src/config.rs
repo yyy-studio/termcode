@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::Deserialize;
 use thiserror::Error;
 
-use termcode_core::config_types::EditorConfig;
+use termcode_core::config_types::{EditorConfig, FileTreeStyle};
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -42,6 +42,7 @@ pub struct UiConfig {
     pub show_minimap: bool,
     pub show_tab_bar: bool,
     pub show_top_bar: bool,
+    pub file_tree_style: FileTreeStyle,
 }
 
 impl Default for UiConfig {
@@ -52,6 +53,7 @@ impl Default for UiConfig {
             show_minimap: false,
             show_tab_bar: true,
             show_top_bar: true,
+            file_tree_style: FileTreeStyle::default(),
         }
     }
 }

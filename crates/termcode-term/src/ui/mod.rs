@@ -4,6 +4,7 @@ pub mod editor_view;
 pub mod file_explorer;
 pub mod fuzzy_finder;
 pub mod hover;
+pub mod image_view;
 pub mod overlay;
 pub mod pane_focus;
 pub mod search;

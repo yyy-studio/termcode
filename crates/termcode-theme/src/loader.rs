@@ -67,6 +67,7 @@ struct UiDef {
     pane_active_bg: Option<String>,
     pane_inactive_fg: Option<String>,
     pane_inactive_bg: Option<String>,
+    panel_borders: Option<bool>,
 }
 
 /// Load a theme from a TOML file.
@@ -133,6 +134,7 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
         pane_active_bg: resolve(&file.ui.pane_active_bg, defaults.pane_active_bg),
         pane_inactive_fg: resolve(&file.ui.pane_inactive_fg, defaults.pane_inactive_fg),
         pane_inactive_bg: resolve(&file.ui.pane_inactive_bg, defaults.pane_inactive_bg),
+        panel_borders: file.ui.panel_borders.unwrap_or(false),
     };
 
     // Resolve syntax scopes

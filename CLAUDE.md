@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                          # Build all crates
-cargo test --workspace               # Run all 91 tests
+cargo test --workspace               # Run all tests
 cargo test -p termcode-core          # Run tests for a single crate
 cargo test -p termcode-core -- test_name  # Run a specific test
 cargo clippy --workspace             # Lint (must be 0 warnings)

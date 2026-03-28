@@ -63,7 +63,7 @@ impl Widget for TopBarWidget<'_> {
         let mut total_width: u16 = 1; // trailing space
         for (key, label) in HOTKEY_HINTS {
             let key_part = format!(" {key} ");
-            let label_part = format!("{label}");
+            let label_part = label.to_string();
             total_width += key_part.len() as u16 + label_part.len() as u16 + 1; // +1 for separator
             hint_parts.push((key_part, label_part));
         }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use termcode_core::config_types::EditorConfig;
+use termcode_core::config_types::{EditorConfig, FileTreeStyle};
 use termcode_syntax::language::LanguageRegistry;
 use termcode_theme::theme::Theme;
 
@@ -12,6 +12,7 @@ use crate::clipboard::ClipboardProvider;
 use crate::document::{Document, DocumentId};
 use crate::file_explorer::FileExplorer;
 use crate::fuzzy::FuzzyFinderState;
+use crate::image::{ImageEntry, ImageId, TabContent};
 use crate::palette::CommandPaletteState;
 use crate::search::SearchState;
 use crate::tab::TabManager;
@@ -59,6 +60,7 @@ pub struct Editor {
     pub active_view: Option<ViewId>,
     pub theme: Theme,
     pub config: EditorConfig,
+    pub file_tree_style: FileTreeStyle,
     pub language_registry: Arc<LanguageRegistry>,
     pub status_message: Option<String>,
     pub file_explorer: FileExplorer,
@@ -70,8 +72,10 @@ pub struct Editor {
     pub completion: CompletionState,
     pub hover: HoverState,
     pub clipboard: Option<Box<dyn ClipboardProvider>>,
+    pub images: HashMap<ImageId, ImageEntry>,
     next_doc_id: usize,
     next_view_id: usize,
+    next_image_id: usize,
 }
 
 impl Editor {
@@ -99,6 +103,7 @@ impl Editor {
             active_view: None,
             theme,
             config,
+            file_tree_style: FileTreeStyle::default(),
             language_registry: Arc::new(language_registry),
             status_message: None,
             file_explorer,
@@ -110,8 +115,10 @@ impl Editor {
             completion: CompletionState::default(),
             hover: HoverState::default(),
             clipboard: None,
+            images: HashMap::new(),
             next_doc_id: 0,
             next_view_id: 0,
+            next_image_id: 0,
         }
     }
 
@@ -129,7 +136,7 @@ impl Editor {
 
         let name = self.documents[&doc_id].display_name().to_string();
         self.status_message = Some(format!("Opened: {name}"));
-        self.tabs.add(name, doc_id);
+        self.tabs.add(name, TabContent::Document(doc_id));
 
         Ok((doc_id, view_id))
     }
@@ -137,8 +144,10 @@ impl Editor {
     /// Sync each tab's `modified` flag with its document's revision-based state.
     pub fn sync_tab_modified(&mut self) {
         for tab in &mut self.tabs.tabs {
-            if let Some(doc) = self.documents.get(&tab.doc_id) {
-                tab.modified = doc.is_modified();
+            if let TabContent::Document(doc_id) = &tab.content {
+                if let Some(doc) = self.documents.get(doc_id) {
+                    tab.modified = doc.is_modified();
+                }
             }
         }
     }
@@ -210,6 +219,45 @@ impl Editor {
         }
     }
 
+    /// Open an image file, creating an ImageEntry and a tab for it.
+    /// Returns the ImageId. No View is created -- active_view is set to None.
+    pub fn open_image(&mut self, path: &Path, format: String, file_size: u64) -> ImageId {
+        let image_id = self.next_image_id();
+        let entry = ImageEntry {
+            id: image_id,
+            path: path.to_path_buf(),
+            format,
+            file_size,
+        };
+        self.images.insert(image_id, entry);
+        self.active_view = None;
+
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "image".to_string());
+        self.status_message = Some(format!("Opened image: {name}"));
+        self.tabs.add(name, TabContent::Image(image_id));
+
+        image_id
+    }
+
+    /// Returns the active image entry if the current tab is an image tab.
+    pub fn active_image(&self) -> Option<&ImageEntry> {
+        let tab = self.tabs.active_tab()?;
+        if let TabContent::Image(image_id) = &tab.content {
+            self.images.get(image_id)
+        } else {
+            None
+        }
+    }
+
+    /// Close an image tab and remove its metadata.
+    pub fn close_image(&mut self, image_id: ImageId) {
+        self.images.remove(&image_id);
+        self.tabs.remove_by_image_id(image_id);
+    }
+
     fn next_document_id(&mut self) -> DocumentId {
         let id = DocumentId(self.next_doc_id);
         self.next_doc_id += 1;
@@ -219,6 +267,12 @@ impl Editor {
     fn next_view_id(&mut self) -> ViewId {
         let id = ViewId(self.next_view_id);
         self.next_view_id += 1;
+        id
+    }
+
+    fn next_image_id(&mut self) -> ImageId {
+        let id = ImageId(self.next_image_id);
+        self.next_image_id += 1;
         id
     }
 }

@@ -300,7 +300,7 @@ mod tests {
         let mut tabs = termcode_view::tab::TabManager::new();
         tabs.add(
             "main.rs".to_string(),
-            termcode_view::document::DocumentId(0),
+            termcode_view::image::TabContent::Document(termcode_view::document::DocumentId(0)),
         );
         let positions = tab_positions(&tabs);
         assert_eq!(positions.len(), 1);
@@ -311,8 +311,14 @@ mod tests {
     #[test]
     fn tab_positions_multiple() {
         let mut tabs = termcode_view::tab::TabManager::new();
-        tabs.add("a.rs".to_string(), termcode_view::document::DocumentId(0));
-        tabs.add("b.rs".to_string(), termcode_view::document::DocumentId(1));
+        tabs.add(
+            "a.rs".to_string(),
+            termcode_view::image::TabContent::Document(termcode_view::document::DocumentId(0)),
+        );
+        tabs.add(
+            "b.rs".to_string(),
+            termcode_view::image::TabContent::Document(termcode_view::document::DocumentId(1)),
+        );
         let positions = tab_positions(&tabs);
         assert_eq!(positions.len(), 2);
         // " a.rs " = 6, then separator (1), " b.rs " = 6
@@ -349,6 +355,8 @@ mod tests {
             sidebar: Some(Rect::new(0, 2, 20, 21)),
             sidebar_title: Some(Rect::new(0, 1, 20, 1)),
             sidebar_border: None,
+            sidebar_panel: None,
+            editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
             editor_area: Rect::new(20, 2, 60, 21),
             status_bar: Rect::new(0, 23, 80, 1),
@@ -361,6 +369,8 @@ mod tests {
             sidebar: Some(Rect::new(0, 1, 19, 22)),
             sidebar_title: None,
             sidebar_border: Some(Rect::new(19, 1, 1, 22)),
+            sidebar_panel: None,
+            editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
             editor_area: Rect::new(20, 2, 60, 21),
             status_bar: Rect::new(0, 23, 80, 1),

@@ -7,6 +7,7 @@ use termcode_core::diagnostic::DiagnosticSeverity;
 use termcode_theme::theme::Theme;
 use termcode_view::document::Document;
 use termcode_view::editor::EditorMode;
+use termcode_view::image::ImageEntry;
 use termcode_view::view::View;
 
 /// Status bar widget displaying cursor position, file info, etc.
@@ -16,6 +17,7 @@ pub struct StatusBarWidget<'a> {
     theme: &'a Theme,
     status_message: Option<&'a str>,
     mode: EditorMode,
+    image: Option<&'a ImageEntry>,
 }
 
 impl<'a> StatusBarWidget<'a> {
@@ -25,6 +27,7 @@ impl<'a> StatusBarWidget<'a> {
         theme: &'a Theme,
         status_message: Option<&'a str>,
         mode: EditorMode,
+        image: Option<&'a ImageEntry>,
     ) -> Self {
         Self {
             doc,
@@ -32,6 +35,7 @@ impl<'a> StatusBarWidget<'a> {
             theme,
             status_message,
             mode,
+            image,
         }
     }
 }
@@ -127,8 +131,11 @@ impl Widget for StatusBarWidget<'_> {
             x_offset += 1;
         }
 
-        // Right side: cursor position, encoding, language
-        if let (Some(doc), Some(view)) = (self.doc, self.view) {
+        // Right side: cursor position, encoding, language (or image info)
+        let right_text = if let Some(img) = self.image {
+            let size = format_file_size(img.file_size);
+            format!("{}  {} ", img.format.to_uppercase(), size)
+        } else if let (Some(doc), Some(view)) = (self.doc, self.view) {
             let line = view.cursor.line + 1;
             let col = view.cursor.column + 1;
             let encoding = doc.buffer.encoding();
@@ -138,10 +145,13 @@ impl Widget for StatusBarWidget<'_> {
                 .map(|id| id.as_ref())
                 .unwrap_or("text");
             let total_lines = doc.buffer.line_count();
+            format!("Ln {line}, Col {col}  {encoding}  {lang}  {total_lines}L ")
+        } else {
+            String::new()
+        };
 
-            let right_text = format!("Ln {line}, Col {col}  {encoding}  {lang}  {total_lines}L ");
+        if !right_text.is_empty() {
             let right_start = (area.x + area.width).saturating_sub(right_text.len() as u16);
-
             for (i, ch) in right_text.chars().enumerate() {
                 let x = right_start + i as u16;
                 if x >= area.x && x < area.x + area.width {
@@ -149,5 +159,15 @@ impl Widget for StatusBarWidget<'_> {
                 }
             }
         }
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }

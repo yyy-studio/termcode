@@ -1,6 +1,13 @@
-use ratatui::Frame;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
+use ratatui::Frame;
+use ratatui::style::Style as RatStyle;
+use ratatui::widgets::{Block, Borders};
+
+use ratatui_image::protocol::StatefulProtocol;
 use termcode_view::editor::{Editor, EditorMode};
+use termcode_view::image::{ImageId, TabContent};
 
 use termcode_theme::theme::PaneFocusStyle;
 
@@ -11,20 +18,41 @@ use crate::ui::editor_view::EditorViewWidget;
 use crate::ui::file_explorer::FileExplorerWidget;
 use crate::ui::fuzzy_finder::FuzzyFinderWidget;
 use crate::ui::hover::HoverWidget;
+use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
 use crate::ui::search::SearchOverlayWidget;
 use crate::ui::status_bar::StatusBarWidget;
 use crate::ui::tab_bar::TabBarWidget;
 use crate::ui::top_bar::TopBarWidget;
 
-pub fn render(frame: &mut Frame, editor: &Editor) {
+pub fn render(
+    frame: &mut Frame,
+    editor: &Editor,
+    image_cache: &HashMap<ImageId, Mutex<StatefulProtocol>>,
+) {
     let area = frame.area();
     let app_layout = layout::compute_layout(
         area,
         editor.file_explorer.visible,
         editor.file_explorer.width,
         editor.theme.ui.pane_focus_style,
+        editor.theme.ui.panel_borders,
     );
+
+    // Render panel borders
+    let border_style = RatStyle::default().fg(editor.theme.ui.border.to_ratatui());
+    if let Some(panel_rect) = app_layout.sidebar_panel {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style);
+        frame.render_widget(block, panel_rect);
+    }
+    if let Some(panel_rect) = app_layout.editor_panel {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style);
+        frame.render_widget(block, panel_rect);
+    }
 
     let top_bar_widget = TopBarWidget::new(&editor.theme);
     frame.render_widget(top_bar_widget, app_layout.top_bar);
@@ -33,8 +61,12 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     let is_editor_active = !is_sidebar_active;
 
     if let Some(sidebar_area) = app_layout.sidebar {
-        let explorer_widget =
-            FileExplorerWidget::new(&editor.file_explorer, &editor.theme, is_sidebar_active);
+        let explorer_widget = FileExplorerWidget::new(
+            &editor.file_explorer,
+            &editor.theme,
+            is_sidebar_active,
+            editor.file_tree_style,
+        );
         frame.render_widget(explorer_widget, sidebar_area);
     }
 
@@ -59,7 +91,26 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     let tab_bar_widget = TabBarWidget::new(&editor.tabs, &editor.theme);
     frame.render_widget(tab_bar_widget, app_layout.tab_bar);
 
-    if let (Some(view), Some(doc)) = (editor.active_view(), editor.active_document()) {
+    let active_tab_content = editor.tabs.active_tab().map(|t| &t.content);
+    let is_image_tab = matches!(active_tab_content, Some(TabContent::Image(_)));
+
+    if is_image_tab {
+        if let Some(TabContent::Image(image_id)) = active_tab_content {
+            if let Some(mutex_proto) = image_cache.get(image_id) {
+                if let Ok(mut protocol) = mutex_proto.lock() {
+                    let image_widget = ImageViewWidget::new(&editor.theme);
+                    image_widget.render_stateful(
+                        app_layout.editor_area,
+                        frame.buffer_mut(),
+                        &mut protocol,
+                    );
+                }
+            } else {
+                let placeholder = ImagePlaceholderWidget::new("Image not available", &editor.theme);
+                frame.render_widget(placeholder, app_layout.editor_area);
+            }
+        }
+    } else if let (Some(view), Some(doc)) = (editor.active_view(), editor.active_document()) {
         let search = if editor.mode == EditorMode::Search {
             Some(&editor.search)
         } else {
@@ -93,7 +144,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         _ => {}
     }
 
-    if editor.completion.visible {
+    if !is_image_tab && editor.completion.visible {
         if let Some((cursor_x, cursor_y)) = cursor_screen_position(editor, &app_layout) {
             let completion_widget = CompletionWidget::new(
                 &editor.completion,
@@ -106,7 +157,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         }
     }
 
-    if editor.hover.visible {
+    if !is_image_tab && editor.hover.visible {
         if let Some((cursor_x, cursor_y)) = cursor_screen_position(editor, &app_layout) {
             let hover_widget = HoverWidget::new(
                 &editor.hover,
@@ -125,6 +176,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         &editor.theme,
         editor.status_message.as_deref(),
         editor.mode,
+        editor.active_image(),
     );
     frame.render_widget(status_widget, app_layout.status_bar);
 }

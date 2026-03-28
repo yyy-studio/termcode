@@ -63,6 +63,8 @@ impl InputMapper {
             (key(ctrl, KeyCode::Char('d')), "goto.definition"),
             (key(none, KeyCode::F(12)), "goto.definition"),
             (key(shift, KeyCode::Char('K')), "lsp.hover"),
+            (key(none, KeyCode::Char(':')), "palette.open"),
+            (key(none, KeyCode::Char('`')), "palette.open"),
         ];
 
         let insert = vec![

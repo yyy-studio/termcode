@@ -23,3 +23,5 @@ log.workspace = true
 env_logger.workspace = true
 serde = { workspace = true }
 unicode-width = { workspace = true }
+ratatui-image = { workspace = true }
+image = { workspace = true }

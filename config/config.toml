@@ -15,6 +15,7 @@ sidebar_visible = true
 show_minimap = false
 show_tab_bar = true
 show_top_bar = true
+file_tree_style = "tree" # emoji, tree, emoji_tree
 
 # LSP server configurations
 # [[lsp]]

@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -22,8 +23,12 @@ use termcode_view::file_explorer::FileNodeKind;
 
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
-use crate::command::{insert_char, register_builtin_commands, rerun_search, CommandRegistry};
+use crate::command::{CommandRegistry, insert_char, register_builtin_commands, rerun_search};
 use crate::event::{AppEvent, EventHandler};
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+use termcode_view::image::ImageId;
+
 use crate::input::InputMapper;
 use crate::layout;
 use crate::lsp_bridge::LspBridge;
@@ -44,6 +49,8 @@ pub struct App {
     terminal_size: (u16, u16),
     /// Whether mouse capture was enabled at startup (for clean teardown).
     mouse_enabled: bool,
+    image_picker: Option<Picker>,
+    pub image_cache: HashMap<ImageId, Mutex<StatefulProtocol>>,
 }
 
 impl App {
@@ -57,6 +64,7 @@ impl App {
         let config = EditorConfig::default();
         let lang_registry = LanguageRegistry::with_builtins();
         let mut editor = Editor::new(theme, config, lang_registry, root);
+        editor.file_tree_style = app_config.ui.file_tree_style;
         editor.clipboard = Some(Box::new(crate::clipboard::ArboardClipboard::new()));
 
         let mut command_registry = CommandRegistry::new();
@@ -75,6 +83,8 @@ impl App {
             Some(LspBridge::new(app_config.lsp, lsp_event_tx))
         };
 
+        let image_picker = Picker::from_query_stdio().ok();
+
         let mouse_enabled = editor.config.mouse_enabled;
         Self {
             editor,
@@ -87,6 +97,8 @@ impl App {
             lsp_trigger_chars: HashMap::new(),
             terminal_size: (80, 24),
             mouse_enabled,
+            image_picker,
+            image_cache: HashMap::new(),
         }
     }
 
@@ -96,15 +108,43 @@ impl App {
     }
 
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<()> {
+        if is_image_extension(path) {
+            self.open_image_file(path)?;
+            return Ok(());
+        }
         let (doc_id, _view_id) = self.editor.open_file(path)?;
         self.lsp_notify_did_open(doc_id);
+        Ok(())
+    }
+
+    fn open_image_file(&mut self, path: &Path) -> anyhow::Result<()> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_ascii_lowercase();
+        let metadata = std::fs::metadata(path)?;
+        let file_size = metadata.len();
+        let image_id = self.editor.open_image(path, ext, file_size);
+
+        if let Some(picker) = &mut self.image_picker {
+            match image::open(path) {
+                Ok(dyn_image) => {
+                    let protocol = picker.new_resize_protocol(dyn_image);
+                    self.image_cache.insert(image_id, Mutex::new(protocol));
+                }
+                Err(e) => {
+                    self.editor.status_message = Some(format!("Failed to decode image: {e}"));
+                }
+            }
+        }
         Ok(())
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut terminal = setup_terminal(self.editor.config.mouse_enabled)?;
 
-        terminal.draw(|frame| render::render(frame, &self.editor))?;
+        terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
 
         loop {
             while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
@@ -127,6 +167,7 @@ impl App {
                     self.editor.file_explorer.visible,
                     self.editor.file_explorer.width,
                     self.editor.theme.ui.pane_focus_style,
+                    self.editor.theme.ui.panel_borders,
                 );
                 if let Some(view) = self.editor.active_view_mut() {
                     view.area_height = app_layout.editor_area.height;
@@ -150,7 +191,7 @@ impl App {
             }
 
             self.editor.sync_tab_modified();
-            terminal.draw(|frame| render::render(frame, &self.editor))?;
+            terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
         }
 
         if let Some(ref bridge) = self.lsp_bridge {
@@ -191,9 +232,13 @@ impl App {
             .tabs
             .iter()
             .filter_map(|tab| {
-                let doc = self.editor.documents.get(&tab.doc_id)?;
+                let doc_id = match &tab.content {
+                    termcode_view::image::TabContent::Document(id) => *id,
+                    termcode_view::image::TabContent::Image(_) => return None,
+                };
+                let doc = self.editor.documents.get(&doc_id)?;
                 let path = doc.path.clone()?;
-                let view = self.editor.find_view_by_doc_id(tab.doc_id)?;
+                let view = self.editor.find_view_by_doc_id(doc_id)?;
                 let view = self.editor.views.get(&view)?;
                 Some(crate::session::SessionFile {
                     path,
@@ -237,6 +282,7 @@ impl App {
             self.editor.file_explorer.visible,
             self.editor.file_explorer.width,
             self.editor.theme.ui.pane_focus_style,
+            self.editor.theme.ui.panel_borders,
         );
 
         match mouse::handle_mouse(&mut self.editor, event, &app_layout) {
@@ -452,6 +498,10 @@ impl App {
 
         if let Some(cmd_id) = self.input_mapper.resolve(self.editor.mode, key) {
             match cmd_id {
+                "palette.open" => {
+                    self.open_command_palette();
+                    return;
+                }
                 "goto.definition" => {
                     self.request_definition();
                     return;
@@ -753,13 +803,40 @@ impl App {
     }
 
     fn open_file_from_overlay(&mut self, path: &Path) {
-        let existing_doc = self.editor.tabs.tabs.iter().find_map(|t| {
-            let doc = self.editor.documents.get(&t.doc_id)?;
-            if doc.path.as_ref() == Some(&path.to_path_buf()) {
-                Some(t.doc_id)
-            } else {
+        use termcode_view::image::TabContent;
+
+        if is_image_extension(path) {
+            let existing_image = self.editor.tabs.tabs.iter().find_map(|t| {
+                if let TabContent::Image(image_id) = &t.content {
+                    let entry = self.editor.images.get(image_id)?;
+                    if entry.path == path {
+                        return Some(*image_id);
+                    }
+                }
                 None
+            });
+
+            if let Some(image_id) = existing_image {
+                if let Some(idx) = self.editor.tabs.find_by_image_id(image_id) {
+                    self.editor.tabs.set_active(idx);
+                }
+                self.editor.active_view = None;
+            } else if let Err(e) = self.open_image_file(path) {
+                self.editor.status_message = Some(format!("Error: {e}"));
             }
+            return;
+        }
+
+        let existing_doc = self.editor.tabs.tabs.iter().find_map(|t| match &t.content {
+            TabContent::Document(doc_id) => {
+                let doc = self.editor.documents.get(doc_id)?;
+                if doc.path.as_ref() == Some(&path.to_path_buf()) {
+                    Some(*doc_id)
+                } else {
+                    None
+                }
+            }
+            TabContent::Image(_) => None,
         });
 
         if let Some(doc_id) = existing_doc {
@@ -778,10 +855,18 @@ impl App {
     }
 
     fn handle_close_tab(&mut self) {
+        use termcode_view::image::TabContent;
         if let Some(tab) = self.editor.tabs.active_tab() {
-            let doc_id = tab.doc_id;
-            self.lsp_notify_did_close(doc_id);
-            self.editor.close_document(doc_id);
+            match tab.content {
+                TabContent::Document(doc_id) => {
+                    self.lsp_notify_did_close(doc_id);
+                    self.editor.close_document(doc_id);
+                }
+                TabContent::Image(image_id) => {
+                    self.image_cache.remove(&image_id);
+                    self.editor.close_image(image_id);
+                }
+            }
         }
         if self.editor.tabs.tabs.is_empty() {
             self.editor.active_view = None;
@@ -791,10 +876,17 @@ impl App {
     }
 
     fn sync_active_view_to_tab(&mut self) {
+        use termcode_view::image::TabContent;
         if let Some(tab) = self.editor.tabs.active_tab() {
-            let doc_id = tab.doc_id;
-            if let Some(view_id) = self.editor.find_view_by_doc_id(doc_id) {
-                self.editor.active_view = Some(view_id);
+            match tab.content {
+                TabContent::Document(doc_id) => {
+                    if let Some(view_id) = self.editor.find_view_by_doc_id(doc_id) {
+                        self.editor.active_view = Some(view_id);
+                    }
+                }
+                TabContent::Image(_) => {
+                    self.editor.active_view = None;
+                }
             }
         }
     }
@@ -1114,6 +1206,17 @@ impl App {
         let position = termcode_core::position::Position::new(view.cursor.line, view.cursor.column);
         Some((language, uri, position))
     }
+}
+
+fn is_image_extension(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => return false,
+    };
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tiff" | "tif"
+    )
 }
 
 /// Returns true for command IDs that mutate the document content.

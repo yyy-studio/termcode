@@ -1,0 +1,77 @@
+[meta]
+name = "Lazygit"
+
+[palette]
+bg = "#1a1a2e"
+bg_light = "#222244"
+fg = "#c8d3f5"
+fg_dim = "#636da6"
+red = "#ff6b6b"
+green = "#98c379"
+yellow = "#e5c07b"
+blue = "#7aa2f7"
+magenta = "#c678dd"
+cyan = "#89ddff"
+border = "#414868"
+active = "#7aa2f7"
+
+[ui]
+background = "bg"
+foreground = "fg"
+cursor = "active"
+selection = "#2d3f76"
+cursor_line_bg = "#1e1e3a"
+line_number = "fg_dim"
+line_number_active = "fg"
+status_bar_bg = "bg_light"
+status_bar_fg = "fg"
+tab_active_bg = "bg"
+tab_inactive_bg = "bg_light"
+sidebar_bg = "bg"
+sidebar_fg = "fg"
+border = "border"
+error = "red"
+warning = "yellow"
+info = "blue"
+hint = "cyan"
+search_match = "yellow"
+search_match_active = "#d19a66"
+pane_focus_style = "title_bar"
+pane_active_fg = "bg"
+pane_active_bg = "active"
+pane_inactive_fg = "fg_dim"
+pane_inactive_bg = "bg_light"
+panel_borders = true
+
+[scopes]
+"attribute" = { fg = "yellow" }
+"comment" = { fg = "fg_dim", italic = true }
+"constant" = { fg = "cyan" }
+"constant.numeric" = { fg = "yellow" }
+"constant.character" = { fg = "green" }
+"constant.character.escape" = { fg = "cyan" }
+"constructor" = { fg = "blue" }
+"function" = { fg = "blue" }
+"function.macro" = { fg = "magenta" }
+"function.builtin" = { fg = "cyan" }
+"keyword" = { fg = "magenta" }
+"keyword.control" = { fg = "magenta" }
+"keyword.control.return" = { fg = "magenta" }
+"keyword.control.import" = { fg = "magenta" }
+"keyword.operator" = { fg = "magenta" }
+"keyword.function" = { fg = "magenta" }
+"label" = { fg = "red" }
+"namespace" = { fg = "yellow" }
+"operator" = { fg = "cyan" }
+"punctuation" = { fg = "fg" }
+"punctuation.bracket" = { fg = "fg" }
+"punctuation.delimiter" = { fg = "fg" }
+"string" = { fg = "green" }
+"string.special" = { fg = "cyan" }
+"type" = { fg = "yellow" }
+"type.builtin" = { fg = "yellow" }
+"variable" = { fg = "red" }
+"variable.builtin" = { fg = "red" }
+"variable.parameter" = { fg = "red" }
+"tag" = { fg = "red" }
+"special" = { fg = "blue" }

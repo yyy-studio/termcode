@@ -375,10 +375,10 @@ fn cmd_clipboard_paste(editor: &mut Editor) -> anyhow::Result<()> {
 }
 
 fn cmd_file_save(editor: &mut Editor) -> anyhow::Result<()> {
-    let doc_id = editor
-        .active_view()
-        .map(|v| v.doc_id)
-        .ok_or_else(|| anyhow::anyhow!("No active document"))?;
+    let doc_id = match editor.active_view().map(|v| v.doc_id) {
+        Some(id) => id,
+        None => return Ok(()),
+    };
     editor.save_document(doc_id)
 }
 
@@ -562,6 +562,9 @@ fn cmd_end(editor: &mut Editor) -> anyhow::Result<()> {
 }
 
 fn cmd_mode_insert(editor: &mut Editor) -> anyhow::Result<()> {
+    if editor.active_view().is_none() {
+        return Ok(());
+    }
     editor.switch_mode(EditorMode::Insert);
     Ok(())
 }
@@ -572,22 +575,36 @@ fn cmd_mode_normal(editor: &mut Editor) -> anyhow::Result<()> {
 }
 
 fn cmd_tab_next(editor: &mut Editor) -> anyhow::Result<()> {
+    use termcode_view::image::TabContent;
     editor.tabs.next();
     if let Some(tab) = editor.tabs.active_tab() {
-        let doc_id = tab.doc_id;
-        if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
-            editor.active_view = Some(view_id);
+        match tab.content {
+            TabContent::Document(doc_id) => {
+                if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
+                    editor.active_view = Some(view_id);
+                }
+            }
+            TabContent::Image(_) => {
+                editor.active_view = None;
+            }
         }
     }
     Ok(())
 }
 
 fn cmd_tab_prev(editor: &mut Editor) -> anyhow::Result<()> {
+    use termcode_view::image::TabContent;
     editor.tabs.prev();
     if let Some(tab) = editor.tabs.active_tab() {
-        let doc_id = tab.doc_id;
-        if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
-            editor.active_view = Some(view_id);
+        match tab.content {
+            TabContent::Document(doc_id) => {
+                if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
+                    editor.active_view = Some(view_id);
+                }
+            }
+            TabContent::Image(_) => {
+                editor.active_view = None;
+            }
         }
     }
     Ok(())

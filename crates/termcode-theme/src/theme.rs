@@ -40,6 +40,7 @@ pub struct UiColors {
     pub pane_active_bg: Color,
     pub pane_inactive_fg: Color,
     pub pane_inactive_bg: Color,
+    pub panel_borders: bool,
 }
 
 impl Default for UiColors {
@@ -72,6 +73,7 @@ impl Default for UiColors {
             pane_active_bg: Color::Rgb(97, 175, 239),
             pane_inactive_fg: Color::Rgb(75, 82, 99),
             pane_inactive_bg: Color::Rgb(33, 37, 43),
+            panel_borders: false,
         }
     }
 }
