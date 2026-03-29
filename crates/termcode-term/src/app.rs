@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,7 +23,7 @@ use termcode_view::file_explorer::FileNodeKind;
 
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
-use crate::command::{CommandRegistry, insert_char, register_builtin_commands, rerun_search};
+use crate::command::{insert_char, register_builtin_commands, rerun_search, CommandRegistry};
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
@@ -55,7 +55,15 @@ pub struct App {
 
 impl App {
     pub fn new(root: Option<PathBuf>) -> Self {
-        let app_config = AppConfig::default();
+        let config_path = termcode_config::default::config_dir().join("config.toml");
+        let mut app_config = AppConfig::load(&config_path);
+
+        // Also try project-local config/config.toml
+        let project_config = PathBuf::from("config/config.toml");
+        if project_config.exists() {
+            app_config = AppConfig::load(&project_config);
+        }
+
         Self::with_config(root, app_config)
     }
 

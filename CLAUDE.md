@@ -33,7 +33,7 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 - `termcode-view` is frontend-agnostic: no ratatui, no arboard, no terminal deps. It defines traits (e.g., `ClipboardProvider`), implementations live in `termcode-term`.
 - `termcode-lsp` uses primitive types (`&str` URIs, `String` text) in its API, never `Document` or `Editor`. This prevents view<->lsp cycles.
 - `termcode-term` owns `LspRegistry`, `ArboardClipboard`, and the tokio async runtime. It bridges async LSP with the synchronous event loop via `mpsc` channels.
-- `EditorConfig` and `LineNumberStyle` are defined in `termcode-core` (not config) so `termcode-view` can use them without depending on `termcode-config`.
+- `EditorConfig`, `LineNumberStyle`, and `FileTreeStyle` are defined in `termcode-core` (not config) so `termcode-view` can use them without depending on `termcode-config`.
 
 ### Core Patterns
 
@@ -90,8 +90,22 @@ Six modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `Command
 ### Adding a New Theme
 
 1. Create `runtime/themes/my-theme.toml` following the structure in `one-dark.toml`
-2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes)
+2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides)
 3. Theme is automatically discovered by `list_available_themes()` scanning `runtime/themes/`
+
+### Configuration Loading
+
+Config is loaded once at startup in `App::new()`:
+
+1. User config: `~/.config/termcode/config.toml`
+2. Project-local config: `config/config.toml` (overrides user config if present)
+
+File tree display is controlled by two flat bools under `[ui]` in config (uses `#[serde(flatten)]` on `FileTreeStyle` struct):
+
+- `tree_style = true|false` — show tree lines (├── └──)
+- `show_file_type_emoji = true|false` — show file type emoji icons
+
+File type icons are configured per-theme via `[icons]` section (directory_open, directory_closed, file_default) and `[icons.extensions]` table (extension → emoji). User overrides merge on top of defaults.
 
 ## Important Technical Details
 

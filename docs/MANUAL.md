@@ -619,10 +619,12 @@ When you open a file directly, the sidebar is hidden but the parent directory is
 
 ### Tree Navigation
 
-The file explorer displays a hierarchical tree of files and directories. Directories are shown with a disclosure indicator:
+The file explorer displays a hierarchical tree of files and directories. The display style is controlled by two config options under `[ui]`:
 
-- **Collapsed directory**: shown with a right-pointing triangle (or similar indicator)
-- **Expanded directory**: shown with a down-pointing triangle
+- `tree_style = true|false` — Show tree lines (├── └── │) for hierarchy. When `false`, indentation is used instead.
+- `show_file_type_emoji = true|false` — Show emoji icons for files and directories. Collapsed directories show the `directory_closed` icon, expanded ones show `directory_open`. File icons are determined by extension.
+
+Both default to `true`.
 
 Navigation keys:
 
@@ -980,6 +982,14 @@ show_tab_bar = true
 # Default: true
 show_top_bar = true
 
+# Show tree lines (├── └── │) in the file explorer.
+# Default: true
+tree_style = true
+
+# Show file type emoji icons in the file explorer.
+# Default: true
+show_file_type_emoji = true
+
 # LSP server configurations.
 # Add one [[lsp]] section per language server.
 
@@ -1014,13 +1024,15 @@ show_top_bar = true
 
 ### UI Options Detail
 
-| Option            | Type    | Default | Description                |
-| ----------------- | ------- | ------- | -------------------------- |
-| `sidebar_width`   | integer | `30`    | Sidebar width in columns   |
-| `sidebar_visible` | boolean | `true`  | Sidebar visible on startup |
-| `show_minimap`    | boolean | `false` | Show minimap (future)      |
-| `show_tab_bar`    | boolean | `true`  | Show the tab bar           |
-| `show_top_bar`    | boolean | `true`  | Show the top bar           |
+| Option                 | Type    | Default | Description                           |
+| ---------------------- | ------- | ------- | ------------------------------------- |
+| `sidebar_width`        | integer | `30`    | Sidebar width in columns              |
+| `sidebar_visible`      | boolean | `true`  | Sidebar visible on startup            |
+| `show_minimap`         | boolean | `false` | Show minimap (future)                 |
+| `show_tab_bar`         | boolean | `true`  | Show the tab bar                      |
+| `show_top_bar`         | boolean | `true`  | Show the top bar                      |
+| `tree_style`           | boolean | `true`  | Show tree lines in file explorer      |
+| `show_file_type_emoji` | boolean | `true`  | Show file type emoji in file explorer |
 
 ### LSP Server Configuration
 
@@ -1172,7 +1184,7 @@ The default theme is **One Dark**.
 
 ### Theme File Format
 
-Theme files are TOML files with four sections: `[meta]`, `[palette]`, `[ui]`, and `[scopes]`.
+Theme files are TOML files with five sections: `[meta]`, `[palette]`, `[ui]`, `[scopes]`, and `[icons]` (optional).
 
 ```toml
 [meta]
@@ -1234,6 +1246,24 @@ pane_inactive_bg = "#21252b"
 "variable" = { fg = "red" }
 "constant" = { fg = "cyan" }
 "operator" = { fg = "cyan" }
+
+# File type icons (optional).
+# Override directory and file icons shown in the file explorer.
+# Any field omitted uses the built-in default.
+[icons]
+directory_open = "📂"     # Icon for expanded directories
+directory_closed = "📁"   # Icon for collapsed directories
+file_default = "📄"       # Fallback icon for unknown file types
+
+# Per-extension icon overrides. Only specified extensions are overridden;
+# all others keep the built-in default.
+[icons.extensions]
+rs = "🦀"
+py = "🐍"
+js = "⚡"
+ts = "💎"
+md = "📖"
+toml = "⚙️"
 ```
 
 ### Creating Custom Themes

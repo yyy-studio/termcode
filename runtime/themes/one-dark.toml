@@ -39,6 +39,14 @@ pane_active_bg = "blue"
 pane_inactive_fg = "gutter"
 pane_inactive_bg = "#21252b"
 
+[icons]
+directory_open = "▶"
+directory_closed = "▼"
+file_default = "📄"
+
+[icons.extensions]
+md = "📖"
+
 [scopes]
 "attribute" = { fg = "yellow" }
 "comment" = { fg = "comment", italic = true }

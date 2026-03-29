@@ -42,6 +42,7 @@ pub struct UiConfig {
     pub show_minimap: bool,
     pub show_tab_bar: bool,
     pub show_top_bar: bool,
+    #[serde(flatten)]
     pub file_tree_style: FileTreeStyle,
 }
 

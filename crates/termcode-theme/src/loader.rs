@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::palette::Palette;
 use crate::style::{Color, Style, StyleDef};
-use crate::theme::{PaneFocusStyle, Theme, UiColors};
+use crate::theme::{Icons, PaneFocusStyle, Theme, UiColors};
 
 #[derive(Error, Debug)]
 pub enum ThemeError {
@@ -28,6 +28,17 @@ struct ThemeFile {
     ui: UiDef,
     #[serde(default)]
     scopes: HashMap<String, StyleDef>,
+    #[serde(default)]
+    icons: IconsDef,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct IconsDef {
+    directory_open: Option<String>,
+    directory_closed: Option<String>,
+    file_default: Option<String>,
+    #[serde(default)]
+    extensions: HashMap<String, String>,
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -151,11 +162,27 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
         scopes.insert(scope_name.clone(), style);
     }
 
+    // Build icons (merge user overrides on top of defaults)
+    let mut icons = Icons::default();
+    if let Some(v) = file.icons.directory_open {
+        icons.directory_open = v;
+    }
+    if let Some(v) = file.icons.directory_closed {
+        icons.directory_closed = v;
+    }
+    if let Some(v) = file.icons.file_default {
+        icons.file_default = v;
+    }
+    for (ext, icon) in file.icons.extensions {
+        icons.extensions.insert(ext, icon);
+    }
+
     Ok(Theme {
         name: file.meta.name,
         palette,
         scopes,
         ui,
+        icons,
     })
 }
 

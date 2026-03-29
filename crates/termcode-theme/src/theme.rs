@@ -78,6 +78,130 @@ impl Default for UiColors {
     }
 }
 
+/// File type icon configuration.
+#[derive(Debug, Clone)]
+pub struct Icons {
+    pub directory_open: String,
+    pub directory_closed: String,
+    pub file_default: String,
+    /// Extension -> icon mapping (e.g., "rs" -> "🦀")
+    pub extensions: HashMap<String, String>,
+}
+
+impl Default for Icons {
+    fn default() -> Self {
+        let mut extensions = HashMap::new();
+        // Code / text files
+        for ext in &[
+            "txt",
+            "md",
+            "markdown",
+            "rst",
+            "org",
+            "log",
+            "csv",
+            "rs",
+            "py",
+            "js",
+            "ts",
+            "tsx",
+            "jsx",
+            "go",
+            "c",
+            "cpp",
+            "h",
+            "hpp",
+            "java",
+            "rb",
+            "php",
+            "swift",
+            "kt",
+            "scala",
+            "zig",
+            "hs",
+            "ml",
+            "ex",
+            "exs",
+            "lua",
+            "sh",
+            "bash",
+            "zsh",
+            "fish",
+            "ps1",
+            "bat",
+            "cmd",
+            "css",
+            "scss",
+            "sass",
+            "less",
+            "html",
+            "htm",
+            "xml",
+            "sql",
+            "r",
+            "dart",
+            "vue",
+            "svelte",
+            "astro",
+            "toml",
+            "yaml",
+            "yml",
+            "json",
+            "json5",
+            "jsonc",
+            "ini",
+            "cfg",
+            "conf",
+            "env",
+            "lock",
+            "dockerfile",
+            "makefile",
+            "cmake",
+            "nix",
+            "tf",
+            "hcl",
+            "proto",
+            "graphql",
+            "gql",
+            "wasm",
+        ] {
+            extensions.insert(ext.to_string(), "📝".to_string());
+        }
+        // Image files
+        for ext in &[
+            "png", "jpg", "jpeg", "gif", "bmp", "svg", "ico", "webp", "avif", "tiff", "tif", "psd",
+            "ai", "eps",
+        ] {
+            extensions.insert(ext.to_string(), "🖼️".to_string());
+        }
+        // Audio files
+        for ext in &[
+            "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "opus", "mid", "midi",
+        ] {
+            extensions.insert(ext.to_string(), "🎵".to_string());
+        }
+
+        Self {
+            directory_open: "📂".to_string(),
+            directory_closed: "📁".to_string(),
+            file_default: "📄".to_string(),
+            extensions,
+        }
+    }
+}
+
+impl Icons {
+    /// Get the icon for a file by its name/extension.
+    pub fn file_icon(&self, name: &str) -> &str {
+        let ext = name.rsplit('.').next().unwrap_or("");
+        let ext_lower = ext.to_ascii_lowercase();
+        self.extensions
+            .get(&ext_lower)
+            .map(|s| s.as_str())
+            .unwrap_or(&self.file_default)
+    }
+}
+
 /// A complete theme with palette, syntax scopes, and UI colors.
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -85,6 +209,7 @@ pub struct Theme {
     pub palette: Palette,
     pub scopes: HashMap<String, Style>,
     pub ui: UiColors,
+    pub icons: Icons,
 }
 
 impl Theme {
@@ -113,6 +238,7 @@ impl Default for Theme {
             palette: Palette::default(),
             scopes: HashMap::new(),
             ui: UiColors::default(),
+            icons: Icons::default(),
         }
     }
 }

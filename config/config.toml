@@ -13,9 +13,10 @@ mouse_enabled = true
 sidebar_width = 30
 sidebar_visible = true
 show_minimap = false
-show_tab_bar = true
+show_tab_bar = true 
 show_top_bar = true
-file_tree_style = "tree" # emoji, tree, emoji_tree
+tree_style = true 
+show_file_type_emoji = true 
 
 # LSP server configurations
 # [[lsp]]
