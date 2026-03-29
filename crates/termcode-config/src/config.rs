@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -22,6 +23,47 @@ pub struct LspServerConfig {
     pub args: Vec<String>,
 }
 
+/// Per-plugin override configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PluginOverride {
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub config: HashMap<String, toml::Value>,
+}
+
+/// Plugin system configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PluginConfig {
+    pub enabled: bool,
+    pub plugin_dirs: Vec<String>,
+    pub instruction_limit: u32,
+    /// Memory limit in megabytes for the Lua VM.
+    pub memory_limit_mb: usize,
+    #[serde(default)]
+    pub overrides: HashMap<String, PluginOverride>,
+}
+
+impl PluginConfig {
+    /// Returns the memory limit in bytes (derived from `memory_limit_mb`).
+    pub fn memory_limit_bytes(&self) -> usize {
+        self.memory_limit_mb * 1024 * 1024
+    }
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            plugin_dirs: vec!["~/.config/termcode/plugins".to_string()],
+            instruction_limit: 1_000_000,
+            memory_limit_mb: 64,
+            overrides: HashMap::new(),
+        }
+    }
+}
+
 /// Top-level application configuration.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -31,6 +73,8 @@ pub struct AppConfig {
     pub ui: UiConfig,
     #[serde(default)]
     pub lsp: Vec<LspServerConfig>,
+    #[serde(default)]
+    pub plugins: PluginConfig,
 }
 
 /// UI-related configuration.
@@ -66,6 +110,7 @@ impl Default for AppConfig {
             editor: EditorConfig::default(),
             ui: UiConfig::default(),
             lsp: Vec::new(),
+            plugins: PluginConfig::default(),
         }
     }
 }

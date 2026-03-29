@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,10 +23,14 @@ use termcode_view::file_explorer::FileNodeKind;
 
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
-use crate::command::{insert_char, register_builtin_commands, rerun_search, CommandRegistry};
+use crate::command::{
+    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
+    sync_cursor_from_selection,
+};
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
+use termcode_plugin::{DeferredAction, HookEvent, PluginManager};
 use termcode_view::image::ImageId;
 
 use crate::input::InputMapper;
@@ -51,6 +55,7 @@ pub struct App {
     mouse_enabled: bool,
     image_picker: Option<Picker>,
     pub image_cache: HashMap<ImageId, Mutex<StatefulProtocol>>,
+    plugin_manager: Option<PluginManager>,
 }
 
 impl App {
@@ -93,6 +98,40 @@ impl App {
 
         let image_picker = Picker::from_query_stdio().ok();
 
+        let plugin_manager = if app_config.plugins.enabled {
+            match PluginManager::new(app_config.plugins.clone()) {
+                Ok(mut pm) => {
+                    let mut plugin_dirs =
+                        vec![termcode_config::default::runtime_dir().join("plugins")];
+                    for dir_str in &app_config.plugins.plugin_dirs {
+                        plugin_dirs.push(termcode_plugin::expand_tilde(dir_str));
+                    }
+                    pm.load_plugins(&plugin_dirs);
+
+                    for (cmd_id, cmd_desc) in pm.list_commands() {
+                        let leaked_id: &'static str = Box::leak(cmd_id.into_boxed_str());
+                        let leaked_name: &'static str = Box::leak(cmd_desc.into_boxed_str());
+                        command_registry.register(crate::command::CommandEntry {
+                            id: leaked_id,
+                            name: leaked_name,
+                            handler: crate::command::cmd_noop,
+                        });
+                    }
+
+                    input_mapper.apply_overrides(&kb_config, &command_registry);
+
+                    Some(pm)
+                }
+                Err(e) => {
+                    log::error!("Failed to initialize plugin system: {}", e);
+                    editor.status_message = Some(format!("Plugin error: {}", e));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mouse_enabled = editor.config.mouse_enabled;
         Self {
             editor,
@@ -107,6 +146,7 @@ impl App {
             mouse_enabled,
             image_picker,
             image_cache: HashMap::new(),
+            plugin_manager,
         }
     }
 
@@ -122,6 +162,24 @@ impl App {
         }
         let (doc_id, _view_id) = self.editor.open_file(path)?;
         self.lsp_notify_did_open(doc_id);
+
+        let doc = self.editor.documents.get(&doc_id);
+        let hook_path = doc
+            .and_then(|d| d.path.as_ref())
+            .map(|p| p.display().to_string());
+        let hook_filename = doc
+            .and_then(|d| d.path.as_ref())
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string());
+        let hook_language = doc
+            .and_then(|d| d.language_id.as_ref())
+            .map(|l| l.as_ref().to_string());
+        self.dispatch_plugin_hook(HookEvent::OnOpen {
+            path: hook_path,
+            filename: hook_filename,
+            language: hook_language,
+        });
+
         Ok(())
     }
 
@@ -154,10 +212,19 @@ impl App {
 
         terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
 
+        self.dispatch_plugin_hook(HookEvent::OnReady);
+
         loop {
             while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
                 self.update(lsp_event);
             }
+
+            let prev_mode = self.editor.mode;
+            let prev_active_tab = self.editor.tabs.active;
+            let prev_cursor = self
+                .editor
+                .active_view()
+                .map(|v| (v.cursor.line, v.cursor.column));
 
             let event = self.event_handler.next()?;
             self.update(event);
@@ -165,6 +232,8 @@ impl App {
             if self.should_quit {
                 break;
             }
+
+            self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
 
             {
                 let size = terminal.size()?;
@@ -423,19 +492,7 @@ impl App {
         }
 
         if let Some(cmd_id) = self.input_mapper.resolve_global(key) {
-            if cmd_id == "palette.open" {
-                self.open_command_palette();
-                return;
-            }
-            let is_save = cmd_id == "file.save";
-            let is_mutation = is_document_mutation(cmd_id);
-            if let Err(e) = self.command_registry.execute(cmd_id, &mut self.editor) {
-                self.editor.status_message = Some(format!("Error: {e}"));
-            } else if is_save {
-                self.lsp_notify_did_save();
-            } else if is_mutation {
-                self.lsp_notify_did_change();
-            }
+            self.dispatch_command(cmd_id);
             return;
         }
 
@@ -483,6 +540,8 @@ impl App {
                         self.editor.status_message = Some(format!("Error: {e}"));
                     }
                     self.lsp_notify_did_change();
+                    let (path, filename) = self.active_doc_path_info();
+                    self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
                     self.maybe_trigger_completion(c);
                     return;
                 }
@@ -505,34 +564,143 @@ impl App {
         }
 
         if let Some(cmd_id) = self.input_mapper.resolve(self.editor.mode, key) {
-            match cmd_id {
-                "palette.open" => {
-                    self.open_command_palette();
-                    return;
+            self.dispatch_command(cmd_id);
+        }
+    }
+
+    fn dispatch_plugin_hook(&mut self, hook: HookEvent) {
+        if let Some(pm) = &mut self.plugin_manager {
+            match pm.dispatch_hook(hook, &mut self.editor) {
+                Ok((buffer_mutated, deferred_actions)) => {
+                    if buffer_mutated {
+                        self.lsp_notify_did_change();
+                        sync_cursor_from_selection(&mut self.editor);
+                    }
+                    self.process_deferred_actions(deferred_actions);
                 }
-                "goto.definition" => {
-                    self.request_definition();
-                    return;
+                Err(e) => {
+                    log::error!("Hook dispatch error: {}", e);
                 }
-                "lsp.hover" => {
-                    self.request_hover();
-                    return;
-                }
-                "lsp.trigger_completion" => {
-                    self.trigger_completion();
-                    return;
-                }
-                _ => {}
             }
-            let is_save = cmd_id == "file.save";
-            let is_mutation = is_document_mutation(cmd_id);
-            if let Err(e) = self.command_registry.execute(cmd_id, &mut self.editor) {
-                self.editor.status_message = Some(format!("Error: {e}"));
-            } else if is_save {
-                self.lsp_notify_did_save();
-            } else if is_mutation {
-                self.lsp_notify_did_change();
+        }
+    }
+
+    fn dispatch_state_diff_hooks(
+        &mut self,
+        prev_mode: EditorMode,
+        prev_active_tab: usize,
+        prev_cursor: Option<(usize, usize)>,
+    ) {
+        if self.plugin_manager.is_none() {
+            return;
+        }
+
+        if self.editor.mode != prev_mode {
+            self.dispatch_plugin_hook(HookEvent::OnModeChange {
+                old_mode: format!("{:?}", prev_mode),
+                new_mode: format!("{:?}", self.editor.mode),
+            });
+        }
+
+        if self.editor.tabs.active != prev_active_tab {
+            let (path, filename) = self.active_doc_path_info();
+            self.dispatch_plugin_hook(HookEvent::OnTabSwitch { path, filename });
+        }
+
+        let cur_cursor = self
+            .editor
+            .active_view()
+            .map(|v| (v.cursor.line, v.cursor.column));
+        if cur_cursor != prev_cursor {
+            if let Some((line, col)) = cur_cursor {
+                self.dispatch_plugin_hook(HookEvent::OnCursorMove { line, col });
             }
+        }
+    }
+
+    fn active_doc_path_info(&self) -> (Option<String>, Option<String>) {
+        if let Some(doc) = self.editor.active_document() {
+            let path = doc.path.as_ref().map(|p| p.display().to_string());
+            let filename = doc
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string());
+            (path, filename)
+        } else {
+            (None, None)
+        }
+    }
+
+    fn process_deferred_actions(&mut self, actions: Vec<DeferredAction>) {
+        for action in actions {
+            match action {
+                DeferredAction::OpenFile(path) => {
+                    if let Err(e) = self.open_file(&path) {
+                        self.editor.status_message =
+                            Some(format!("Plugin deferred open error: {e}"));
+                    }
+                }
+                DeferredAction::ExecuteCommand(cmd_id) => {
+                    self.dispatch_command(&cmd_id);
+                }
+            }
+        }
+    }
+
+    fn dispatch_command(&mut self, cmd_id: &str) {
+        if cmd_id == "palette.open" {
+            self.open_command_palette();
+            return;
+        }
+        if cmd_id == "goto.definition" {
+            self.request_definition();
+            return;
+        }
+        if cmd_id == "lsp.hover" {
+            self.request_hover();
+            return;
+        }
+        if cmd_id == "lsp.trigger_completion" {
+            self.trigger_completion();
+            return;
+        }
+
+        if cmd_id.starts_with("plugin.") {
+            if let Some(pm) = &mut self.plugin_manager {
+                match pm.execute_command(cmd_id, &mut self.editor) {
+                    Ok((buffer_mutated, deferred_actions)) => {
+                        if buffer_mutated {
+                            self.lsp_notify_did_change();
+                            sync_cursor_from_selection(&mut self.editor);
+                            let (path, filename) = self.active_doc_path_info();
+                            self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
+                        }
+                        self.process_deferred_actions(deferred_actions);
+                    }
+                    Err(e) => {
+                        self.editor.status_message = Some(format!("Plugin error: {e}"));
+                    }
+                }
+            }
+            return;
+        }
+
+        let is_save = cmd_id == "file.save";
+        let is_mutation = is_document_mutation(cmd_id);
+        let result = self
+            .command_registry
+            .execute_by_str(cmd_id, &mut self.editor);
+        if let Err(e) = result {
+            self.editor.status_message = Some(format!("Error: {e}"));
+        } else if is_save {
+            self.lsp_notify_did_save();
+            let (path, filename) = self.active_doc_path_info();
+            self.dispatch_plugin_hook(HookEvent::OnSave { path, filename });
+        } else if is_mutation {
+            self.lsp_notify_did_change();
+            let (path, filename) = self.active_doc_path_info();
+            self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
         }
     }
 
@@ -547,6 +715,8 @@ impl App {
                     self.editor.status_message = Some(format!("Error: {e}"));
                 } else {
                     self.lsp_notify_did_change();
+                    let (path, filename) = self.active_doc_path_info();
+                    self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
                 }
                 return;
             }
@@ -578,6 +748,8 @@ impl App {
                 self.editor.status_message = Some(format!("Error: {e}"));
             } else {
                 self.lsp_notify_did_change();
+                let (path, filename) = self.active_doc_path_info();
+                self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
             }
             return;
         }
@@ -707,18 +879,7 @@ impl App {
                             self.open_theme_palette();
                             return;
                         }
-                        let is_mutation = is_document_mutation(&id);
-                        let is_save = id == "file.save";
-                        if let Some(entry) = self.command_registry.get_by_string(&id) {
-                            let handler = entry.handler;
-                            if let Err(e) = handler(&mut self.editor) {
-                                self.editor.status_message = Some(format!("Error: {e}"));
-                            } else if is_save {
-                                self.lsp_notify_did_save();
-                            } else if is_mutation {
-                                self.lsp_notify_did_change();
-                            }
-                        }
+                        self.dispatch_command(&id);
                     }
                 }
                 PaletteMode::Themes => {
@@ -867,6 +1028,19 @@ impl App {
         if let Some(tab) = self.editor.tabs.active_tab() {
             match tab.content {
                 TabContent::Document(doc_id) => {
+                    let doc = self.editor.documents.get(&doc_id);
+                    let close_path = doc
+                        .and_then(|d| d.path.as_ref())
+                        .map(|p| p.display().to_string());
+                    let close_filename = doc
+                        .and_then(|d| d.path.as_ref())
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().to_string());
+                    self.dispatch_plugin_hook(HookEvent::OnClose {
+                        path: close_path,
+                        filename: close_filename,
+                    });
+
                     self.lsp_notify_did_close(doc_id);
                     self.editor.close_document(doc_id);
                 }
@@ -1177,6 +1351,8 @@ impl App {
         }
         crate::command::sync_selection_from_cursor(&mut self.editor);
         self.lsp_notify_did_change();
+        let (path, filename) = self.active_doc_path_info();
+        self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
     }
 
     fn request_hover(&mut self) {

@@ -12,6 +12,7 @@ termcode-view = { workspace = true }
 termcode-theme = { workspace = true }
 termcode-config = { workspace = true }
 termcode-lsp = { workspace = true }
+termcode-plugin = { workspace = true }
 ratatui.workspace = true
 tokio = { workspace = true }
 serde_json = { workspace = true }

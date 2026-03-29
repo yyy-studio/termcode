@@ -44,6 +44,16 @@ impl CommandRegistry {
         self.commands.get(id)
     }
 
+    /// Execute a command by a non-static string ID (e.g., from plugin deferred actions).
+    pub fn execute_by_str(&self, id: &str, editor: &mut Editor) -> anyhow::Result<()> {
+        let entry = self
+            .commands
+            .values()
+            .find(|e| e.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown command: {id}"))?;
+        (entry.handler)(editor)
+    }
+
     pub fn get_by_string(&self, id: &str) -> Option<&CommandEntry> {
         self.commands.values().find(|e| e.id == id)
     }
@@ -271,7 +281,7 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
     });
 }
 
-fn cmd_noop(_editor: &mut Editor) -> anyhow::Result<()> {
+pub fn cmd_noop(_editor: &mut Editor) -> anyhow::Result<()> {
     Ok(())
 }
 

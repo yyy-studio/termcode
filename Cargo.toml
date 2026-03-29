@@ -63,6 +63,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Clipboard
 arboard = "3"
 
+# Lua
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+
 # Utilities
 anyhow = "1"
 thiserror = "2"
