@@ -54,7 +54,7 @@ impl Widget for StatusBarWidget<'_> {
         // Mode indicator
         let (mode_label, mode_bg) = match self.mode {
             EditorMode::Normal => (" NORMAL ", Color::Rgb(97, 175, 239)),
-            EditorMode::Insert => (" INSERT ", Color::Rgb(152, 195, 121)),
+            EditorMode::Insert => (" EDIT ", Color::Rgb(152, 195, 121)),
             EditorMode::FileExplorer => (" EXPLORER ", Color::Rgb(209, 154, 102)),
             EditorMode::Search => (" SEARCH ", Color::Rgb(229, 192, 123)),
             EditorMode::FuzzyFinder => (" FINDER ", Color::Rgb(198, 120, 221)),

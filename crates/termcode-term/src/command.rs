@@ -154,7 +154,7 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
     });
     registry.register(CommandEntry {
         id: "mode.insert",
-        name: "Enter Insert Mode",
+        name: "Enter Edit Mode",
         handler: cmd_mode_insert,
     });
     registry.register(CommandEntry {

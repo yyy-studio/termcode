@@ -34,7 +34,7 @@ termcode is a terminal-based code viewer and editor written in Rust. It provides
 ### Key Differentiators
 
 - **Integrated file explorer + editor in a single binary.** No external dependencies or plugins are required to browse and edit your project files. The sidebar tree view and editor pane coexist seamlessly.
-- **Modal editing.** termcode uses a Normal/Insert mode paradigm inspired by Vim, allowing efficient keyboard-driven navigation and editing.
+- **Modal editing.** termcode uses a Normal/Edit mode paradigm inspired by Vim, allowing efficient keyboard-driven navigation and editing.
 - **LSP support.** Built-in Language Server Protocol client provides autocomplete, diagnostics, hover information, and go-to-definition for any language with an LSP-compliant server.
 - **Lightweight and fast.** The entire application is approximately 10,000 lines of Rust across an 8-crate workspace, rendering only visible lines for performance.
 - **Themeable.** Ships with three built-in themes (One Dark, Gruvbox Dark, Catppuccin Mocha) and supports user-created themes via TOML files.
@@ -165,7 +165,7 @@ Once the editor is open:
 1. If the file explorer is focused (FileExplorer mode), use `j`/`k` or arrow keys to navigate the tree, and press `Enter` to open a file.
 2. Press `Tab` or `Esc` to leave the file explorer and enter Normal mode in the editor.
 3. In Normal mode, use `h`/`j`/`k`/`l` or arrow keys to move the cursor.
-4. Press `i` to enter Insert mode and begin typing.
+4. Press `i` to enter Edit mode and begin typing.
 5. Press `Esc` to return to Normal mode.
 6. Press `Ctrl+S` to save the current file.
 7. Press `Ctrl+Q` to quit.
@@ -233,7 +233,7 @@ The main editing area consists of:
 
 - **Gutter (line numbers)**: Displayed on the left side. Supports four styles: absolute, relative, relative+absolute, and hidden. The current line's number is highlighted. The gutter width adjusts automatically based on the total number of lines.
 - **Code area**: The main text editing region. Only lines within the viewport are rendered for performance.
-- **Cursor**: Block cursor in Normal mode; positioned on the character. In Insert mode, the cursor can be positioned after the last character on a line.
+- **Cursor**: Block cursor in Normal mode; positioned on the character. In Edit mode, the cursor can be positioned after the last character on a line.
 - **Cursor line highlight**: The line containing the cursor has a subtle background highlight (`cursor_line_bg` color).
 - **Diagnostic indicators**: Error, warning, info, and hint icons appear in the gutter next to lines with LSP diagnostics. Diagnostic text is underlined inline.
 - **Search matches**: When a search is active, all matches are highlighted in the search match color, with the current match in a distinct active color.
@@ -242,7 +242,7 @@ The main editing area consists of:
 
 The status bar at the bottom of the screen shows:
 
-- **Mode indicator**: Displays the current editor mode (NORMAL, INSERT, EXPLORER, SEARCH, FUZZY, PALETTE).
+- **Mode indicator**: Displays the current editor mode (NORMAL, EDIT, EXPLORER, SEARCH, FUZZY, PALETTE).
 - **Cursor position**: Shows the current line and column (e.g., `Ln 42, Col 10`).
 - **Encoding**: Displays the file encoding (UTF-8).
 - **Language**: Shows the detected language for the current file (e.g., `rust`, `python`).
@@ -262,11 +262,11 @@ termcode uses a modal editing paradigm with six distinct modes. The current mode
 **Key characteristics**:
 
 - Cursor movement via `h`/`j`/`k`/`l` or arrow keys.
-- Single-key commands for common operations (e.g., `x` to delete a character, `i` to enter Insert mode).
+- Single-key commands for common operations (e.g., `x` to delete a character, `i` to enter Edit mode).
 - The cursor sits ON a character (cannot be positioned past the last character on a line).
 - No text is inserted when typing alphanumeric keys; they are interpreted as commands.
 
-**Entering Normal mode**: Press `Esc` from Insert mode, or `Tab`/`Esc` from File Explorer mode.
+**Entering Normal mode**: Press `Esc` from Edit mode, or `Tab`/`Esc` from File Explorer mode.
 
 **Cursor movement**:
 | Key | Action |
@@ -275,8 +275,10 @@ termcode uses a modal editing paradigm with six distinct modes. The current mode
 | `j` or Down | Move cursor down |
 | `k` or Up | Move cursor up |
 | `l` or Right | Move cursor right |
-| `g` or Home | Go to beginning of file |
-| `G` (Shift+G) or End | Go to end of file |
+| `0` or Home | Go to beginning of line |
+| `$` or End | Go to end of line |
+| `g` | Go to beginning of file |
+| `G` (Shift+G) | Go to end of file |
 | PageUp | Move one page up |
 | PageDown | Move one page down |
 
@@ -284,7 +286,7 @@ termcode uses a modal editing paradigm with six distinct modes. The current mode
 | Key | Action |
 |------------------|-------------------------------|
 | `x` or Delete | Delete character under cursor |
-| `i` | Enter Insert mode |
+| `i` | Enter Edit mode |
 
 **LSP**:
 | Key | Action |
@@ -294,11 +296,11 @@ termcode uses a modal editing paradigm with six distinct modes. The current mode
 | `Shift+K` | Show hover info (LSP) |
 | `F12` or `Ctrl+D`| Go to definition (LSP) |
 
-### Insert Mode
+### Edit Mode
 
 **Purpose**: Text input. Characters you type are inserted into the document.
 
-**Entering Insert mode**: Press `i` in Normal mode.
+**Entering Edit mode**: Press `i` in Normal mode.
 
 **Key characteristics**:
 
@@ -307,9 +309,9 @@ termcode uses a modal editing paradigm with six distinct modes. The current mode
 - Backspace deletes the character before the cursor.
 - Delete removes the character under the cursor.
 - Enter inserts a newline.
-- Arrow keys move the cursor without leaving Insert mode.
+- Arrow keys move the cursor without leaving Edit mode.
 
-**Exiting Insert mode**: Press `Esc` to return to Normal mode.
+**Exiting Edit mode**: Press `Esc` to return to Normal mode.
 
 **Autocomplete**:
 
@@ -438,25 +440,27 @@ These work in every mode:
 
 ### Normal Mode Keybindings
 
-| Key                 | Command ID         | Action                        |
-| ------------------- | ------------------ | ----------------------------- |
-| `j` / Down          | `cursor.down`      | Move cursor down              |
-| `k` / Up            | `cursor.up`        | Move cursor up                |
-| `h` / Left          | `cursor.left`      | Move cursor left              |
-| `l` / Right         | `cursor.right`     | Move cursor right             |
-| PageDown            | `cursor.page_down` | Page down                     |
-| PageUp              | `cursor.page_up`   | Page up                       |
-| `g` / Home          | `cursor.home`      | Go to beginning of file       |
-| `G` (Shift+G) / End | `cursor.end`       | Go to end of file             |
-| `i`                 | `mode.insert`      | Enter Insert mode             |
-| `x` / Delete        | `edit.delete_char` | Delete character under cursor |
-| `]`                 | `diagnostic.next`  | Jump to next diagnostic       |
-| `[`                 | `diagnostic.prev`  | Jump to previous diagnostic   |
-| `Ctrl+D`            | `goto.definition`  | Go to definition (LSP)        |
-| `F12`               | `goto.definition`  | Go to definition (LSP)        |
-| `Shift+K`           | `lsp.hover`        | Show hover info (LSP)         |
+| Key           | Command ID          | Action                        |
+| ------------- | ------------------- | ----------------------------- |
+| `j` / Down    | `cursor.down`       | Move cursor down              |
+| `k` / Up      | `cursor.up`         | Move cursor up                |
+| `h` / Left    | `cursor.left`       | Move cursor left              |
+| `l` / Right   | `cursor.right`      | Move cursor right             |
+| PageDown      | `cursor.page_down`  | Page down                     |
+| PageUp        | `cursor.page_up`    | Page up                       |
+| `0` / Home    | `cursor.line_start` | Go to beginning of line       |
+| `$` / End     | `cursor.line_end`   | Go to end of line             |
+| `g`           | `cursor.home`       | Go to beginning of file       |
+| `G` (Shift+G) | `cursor.end`        | Go to end of file             |
+| `i`           | `mode.insert`       | Enter Edit mode               |
+| `x` / Delete  | `edit.delete_char`  | Delete character under cursor |
+| `]`           | `diagnostic.next`   | Jump to next diagnostic       |
+| `[`           | `diagnostic.prev`   | Jump to previous diagnostic   |
+| `Ctrl+D`      | `goto.definition`   | Go to definition (LSP)        |
+| `F12`         | `goto.definition`   | Go to definition (LSP)        |
+| `Shift+K`     | `lsp.hover`         | Show hover info (LSP)         |
 
-### Insert Mode Keybindings
+### Edit Mode Keybindings
 
 | Key             | Command ID               | Action                         |
 | --------------- | ------------------------ | ------------------------------ |
@@ -468,6 +472,8 @@ These work in every mode:
 | Down            | `cursor.down`            | Move cursor down               |
 | Left            | `cursor.left`            | Move cursor left               |
 | Right           | `cursor.right`           | Move cursor right              |
+| Home            | `cursor.line_start`      | Go to beginning of line        |
+| End             | `cursor.line_end`        | Go to end of line              |
 | `Ctrl+Space`    | `lsp.trigger_completion` | Manually trigger autocomplete  |
 | Printable chars | _(built-in)_             | Insert character at cursor     |
 
@@ -550,21 +556,21 @@ When the **autocomplete popup** is visible:
 
 ### Text Insertion
 
-To insert text, enter Insert mode by pressing `i` in Normal mode. Then type normally. Every printable character (including those typed with Shift) is inserted at the current cursor position. The cursor advances to the right after each character.
+To insert text, enter Edit mode by pressing `i` in Normal mode. Then type normally. Every printable character (including those typed with Shift) is inserted at the current cursor position. The cursor advances to the right after each character.
 
-Special insertions in Insert mode:
+Special insertions in Edit mode:
 
 - **Enter**: Inserts a newline character, moving subsequent text to the next line.
 - **Tab**: Inserts spaces based on the `tab_size` setting (when `insert_spaces` is true) or a literal tab character.
 
 ### Deletion
 
-| Operation                      | Normal Mode       | Insert Mode |
-| ------------------------------ | ----------------- | ----------- |
-| Delete character under cursor  | `x` or Delete     | Delete      |
-| Delete character before cursor | _(not available)_ | Backspace   |
+| Operation                      | Normal Mode       | Edit Mode |
+| ------------------------------ | ----------------- | --------- |
+| Delete character under cursor  | `x` or Delete     | Delete    |
+| Delete character before cursor | _(not available)_ | Backspace |
 
-In Normal mode, `x` or Delete removes the character under the cursor. In Insert mode, Backspace removes the character before the cursor, and Delete removes the character under the cursor.
+In Normal mode, `x` or Delete removes the character under the cursor. In Edit mode, Backspace removes the character before the cursor, and Delete removes the character under the cursor.
 
 ### Undo and Redo
 
@@ -772,9 +778,11 @@ The following commands are registered in the command palette:
 | `cursor.right`           | Cursor Right         | Move cursor right one character                            |
 | `cursor.page_up`         | Page Up              | Scroll and move cursor up one page                         |
 | `cursor.page_down`       | Page Down            | Scroll and move cursor down one page                       |
+| `cursor.line_start`      | Go to Line Start     | Move cursor to the beginning of the line                   |
+| `cursor.line_end`        | Go to Line End       | Move cursor to the end of the line                         |
 | `cursor.home`            | Go to Beginning      | Move cursor to the beginning of the file                   |
 | `cursor.end`             | Go to End            | Move cursor to the end of the file                         |
-| `mode.insert`            | Enter Insert Mode    | Switch to Insert mode                                      |
+| `mode.insert`            | Enter Edit Mode      | Switch to Edit mode                                        |
 | `mode.normal`            | Enter Normal Mode    | Switch to Normal mode                                      |
 | `tab.next`               | Next Tab             | Switch to the next tab                                     |
 | `tab.prev`               | Previous Tab         | Switch to the previous tab                                 |
@@ -863,7 +871,7 @@ Each entry specifies:
 #### Autocomplete
 
 - **Automatic trigger**: When you type a trigger character (e.g., `.` or `::` in Rust), the autocomplete popup appears automatically.
-- **Manual trigger**: Press `Ctrl+Space` in Insert mode to request completions at the current position.
+- **Manual trigger**: Press `Ctrl+Space` in Edit mode to request completions at the current position.
 - **Popup navigation**: Use `Up`/`Down` to move through the list, `Enter`/`Tab` to accept, `Esc` to dismiss.
 - **Insert text**: The selected completion's insert text replaces the text at the cursor position.
 - The popup automatically dismisses when you press any key other than navigation keys.
@@ -1072,7 +1080,7 @@ The keybinding file is a TOML file with sections for global bindings and per-mod
 "g" = "cursor.home"
 "shift+g" = "cursor.end"
 
-# Insert mode keybindings
+# Edit mode keybindings
 [mode.insert]
 
 # File Explorer mode keybindings
@@ -1428,7 +1436,7 @@ Mouse support is enabled by default and can be disabled by setting `mouse_enable
 
 Left-clicking in the editor area moves the cursor to the clicked position. The click position is mapped to the correct line and column, accounting for the gutter width and scroll offset. If you click past the end of a line, the cursor is placed at the last character of that line.
 
-Clicking in the editor area also switches the mode to Normal (or stays in Insert if already in Insert mode).
+Clicking in the editor area also switches the mode to Normal (or stays in Edit if already in Edit mode).
 
 ### Click on Tabs to Switch
 

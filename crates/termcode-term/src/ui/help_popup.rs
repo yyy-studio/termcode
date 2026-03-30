@@ -41,7 +41,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Editing",
         &[
-            ("i", "Insert Mode"),
+            ("i", "Edit Mode"),
             ("Esc", "Normal Mode"),
             ("Ctrl+C", "Copy"),
             ("Ctrl+X", "Cut"),
