@@ -28,14 +28,17 @@
 
 | Feature                 | Details                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------- |
-| **Modal editing**       | 6 modes -- Normal, Insert, File Explorer, Search, Fuzzy Finder, Command Palette           |
+| **Modal editing**       | 6 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette             |
 | **Syntax highlighting** | Tree-sitter based. Rust, Python, JavaScript, TypeScript, Go, C, C++, TOML, JSON, Markdown |
 | **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics                         |
 | **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring (word boundaries, path proximity)        |
 | **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all                       |
 | **Command palette**     | `Ctrl+Shift+P` -- searchable command list with theme switcher                             |
 | **Multi-tab**           | Open multiple files, navigate with `Alt+Left/Right`, close with `Ctrl+W`                  |
+| **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes                         |
 | **File explorer**       | `Ctrl+B` -- tree view sidebar with `.gitignore` awareness                                 |
+| **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF (Sixel/Kitty/iTerm2)     |
+| **Lua plugins**         | Custom commands, editor API, hook system (`on_open`, `on_save`, `on_close`, etc.)         |
 | **Undo/Redo**           | Branching history with full transaction support                                           |
 | **Mouse support**       | Click, drag select, scroll wheel, tab/sidebar click                                       |
 
@@ -86,34 +89,43 @@ termcode
 
 #### Normal Mode
 
-| Key                          | Action                     |
-| ---------------------------- | -------------------------- |
-| `h` `j` `k` `l` / Arrow keys | Move cursor                |
-| `g` / `Home`                 | Go to beginning            |
-| `G` / `End`                  | Go to end                  |
-| `i`                          | Enter Insert mode          |
-| `Ctrl+P`                     | Fuzzy file finder          |
-| `Ctrl+F`                     | Search                     |
-| `Ctrl+H`                     | Search & Replace           |
-| `Ctrl+Shift+P`               | Command palette            |
-| `Ctrl+B`                     | Toggle file explorer       |
-| `Ctrl+D` / `F12`             | Go to definition           |
-| `Ctrl+Z`                     | Undo                       |
-| `Ctrl+Y`                     | Redo                       |
-| `Ctrl+S`                     | Save                       |
-| `Ctrl+W`                     | Close tab                  |
-| `Alt+Left` / `Alt+Right`     | Previous / next tab        |
-| `]` / `[`                    | Next / previous diagnostic |
-| `Ctrl+C`                     | Copy selection             |
-| `Ctrl+Q`                     | Quit                       |
+| Key                          | Action                          |
+| ---------------------------- | ------------------------------- |
+| `h` `j` `k` `l` / Arrow keys | Move cursor                     |
+| `0` / `Home`                 | Go to line start                |
+| `$` / `End`                  | Go to line end                  |
+| `g`                          | Go to document start            |
+| `G`                          | Go to document end              |
+| `PageUp` / `PageDown`        | Page up / down                  |
+| `i`                          | Enter Edit mode                 |
+| `x` / `Delete`               | Delete character                |
+| `Shift+K`                    | LSP hover info                  |
+| `Ctrl+P`                     | Fuzzy file finder               |
+| `Ctrl+F`                     | Search                          |
+| `Ctrl+H`                     | Search & Replace                |
+| `Ctrl+Shift+P` / `:`         | Command palette                 |
+| `Ctrl+B`                     | Toggle file explorer            |
+| `Ctrl+D` / `F12`             | Go to definition                |
+| `Ctrl+Z`                     | Undo                            |
+| `Ctrl+Y`                     | Redo                            |
+| `Ctrl+S`                     | Save                            |
+| `Ctrl+W`                     | Close tab (confirms if unsaved) |
+| `Alt+Left` / `Alt+Right`     | Previous / next tab             |
+| `]` / `[`                    | Next / previous diagnostic      |
+| `Ctrl+C`                     | Copy selection                  |
+| `Ctrl+Q`                     | Quit (confirms if unsaved)      |
+| `F1` / `?`                   | Help                            |
 
-#### Insert Mode
+#### Edit Mode
 
 | Key                    | Action                |
 | ---------------------- | --------------------- |
 | `Esc`                  | Return to Normal mode |
 | Any character          | Insert at cursor      |
 | `Backspace` / `Delete` | Delete character      |
+| `Enter`                | New line              |
+| `Home` / `End`         | Line start / end      |
+| Arrow keys             | Move cursor           |
 
 ## Configuration
 
