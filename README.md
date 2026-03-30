@@ -37,12 +37,18 @@ Download from [GitHub Releases](https://github.com/yyy-studio/termcode/releases)
 
 ```bash
 # macOS (Apple Silicon)
-curl -LO https://github.com/yyy-studio/termcode/releases/latest/download/termcode-v0.1.1-aarch64-apple-darwin.tar.gz
-tar xzf termcode-v0.1.1-aarch64-apple-darwin.tar.gz
-sudo cp termcode-v0.1.1-aarch64-apple-darwin/termcode /usr/local/bin/
+curl -LO https://github.com/yyy-studio/termcode/releases/latest/download/termcode-aarch64-apple-darwin.tar.gz
+tar xzf termcode-aarch64-apple-darwin.tar.gz
+sudo cp termcode-aarch64-apple-darwin/termcode /usr/local/bin/
 ```
 
-Available targets: macOS (arm64, x86_64), Linux (x86_64, aarch64), Windows (x86_64).
+| Platform              | Download                                    |
+| --------------------- | ------------------------------------------- |
+| macOS (Apple Silicon) | `termcode-aarch64-apple-darwin.tar.gz`      |
+| macOS (Intel)         | `termcode-x86_64-apple-darwin.tar.gz`       |
+| Linux (x86_64)        | `termcode-x86_64-unknown-linux-gnu.tar.gz`  |
+| Linux (ARM64)         | `termcode-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows (x86_64)      | `termcode-x86_64-pc-windows-msvc.zip`       |
 
 ### From source (requires Rust 1.85+)
 
