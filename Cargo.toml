@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 default-run = "termcode"
 
 [[bin]]
@@ -34,6 +39,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
+description = "A fast, lightweight terminal code editor built in Rust"
+repository = "https://github.com/yyy-studio/termcode"
+homepage = "https://github.com/yyy-studio/termcode"
+readme = "README.md"
+keywords = ["editor", "terminal", "tui", "code-editor", "rust"]
+categories = ["command-line-utilities", "text-editors"]
 
 [workspace.dependencies]
 # Core
@@ -86,3 +97,10 @@ termcode-theme = { path = "crates/termcode-theme" }
 termcode-plugin = { path = "crates/termcode-plugin" }
 termcode-term = { path = "crates/termcode-term" }
 termcode-config = { path = "crates/termcode-config" }
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+strip = true
+codegen-units = 1
+panic = "abort"
