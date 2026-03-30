@@ -913,12 +913,31 @@ The LSP client uses asynchronous communication via tokio, with JSON-RPC 2.0 over
 
 ## 13. Configuration
 
+### Directory Structure
+
+All user data is stored under `~/.config/termcode/` (on macOS/Linux) or `%APPDATA%\termcode\` (on Windows):
+
+```
+~/.config/termcode/
+  config.toml          # editor settings
+  keybindings.toml     # custom keybindings
+  themes/              # custom theme files (.toml)
+  plugins/             # Lua plugins (each in its own subdirectory)
+  sessions/            # auto-saved session files
+```
+
+Themes and plugins are searched in multiple locations (first match wins):
+
+1. `runtime/` next to the binary (portable install / development)
+2. `~/.config/termcode/` (user config directory)
+3. `runtime/` in the current working directory (fallback)
+
 ### Config File Location
 
-termcode looks for configuration in the following locations:
+termcode loads configuration from:
 
 1. **User config**: `~/.config/termcode/config.toml` (on macOS/Linux)
-2. **Project config**: `config/config.toml` in the project root (for development)
+2. **Project config**: `config/config.toml` in the project root (overrides user config)
 
 If no configuration file is found, default values are used for all settings. If a configuration file exists but contains parse errors, a warning is logged and defaults are used.
 
@@ -927,7 +946,7 @@ If no configuration file is found, default values are used for all settings. If 
 Below is a fully annotated configuration file with all options and their defaults:
 
 ```toml
-# Theme name. Must match a .toml file in the runtime/themes/ directory.
+# Theme name. Must match a .toml file in ~/.config/termcode/themes/ or runtime/themes/.
 # Built-in options: "one-dark", "gruvbox-dark", "catppuccin-mocha"
 theme = "one-dark"
 
@@ -1182,11 +1201,11 @@ Invalid bindings are silently skipped at runtime -- they do not prevent the edit
 
 termcode ships with three built-in themes:
 
-| Theme Name       | File                                   | Description                |
-| ---------------- | -------------------------------------- | -------------------------- |
-| One Dark         | `runtime/themes/one-dark.toml`         | Atom-inspired dark theme   |
-| Gruvbox Dark     | `runtime/themes/gruvbox-dark.toml`     | Retro groove dark theme    |
-| Catppuccin Mocha | `runtime/themes/catppuccin-mocha.toml` | Soothing pastel dark theme |
+| Theme Name       | File                    | Description                        |
+| ---------------- | ----------------------- | ---------------------------------- |
+| One Dark         | `one-dark.toml`         | Atom-inspired dark theme (default) |
+| Gruvbox Dark     | `gruvbox-dark.toml`     | Retro groove dark theme            |
+| Catppuccin Mocha | `catppuccin-mocha.toml` | Soothing pastel dark theme         |
 
 The default theme is **One Dark**.
 
@@ -1276,7 +1295,7 @@ toml = "⚙️"
 
 ### Creating Custom Themes
 
-1. Create a new `.toml` file in the `runtime/themes/` directory (next to the binary, or in the project root).
+1. Create a new `.toml` file in `~/.config/termcode/themes/` (e.g., `~/.config/termcode/themes/my-theme.toml`).
 2. Follow the theme file format described above.
 3. The filename (without `.toml` extension) becomes the theme identifier used in `config.toml` and the theme palette.
 4. Switch to your theme by setting `theme = "my-theme-name"` in `config.toml`, or by using the command palette at runtime.
@@ -1504,10 +1523,10 @@ Left-clicking on a line number in the gutter selects the entire line. The select
 
 **Solutions**:
 
-1. **Verify the theme file exists**: Check that a `.toml` file with the theme name exists in `runtime/themes/` (e.g., `runtime/themes/one-dark.toml`).
+1. **Verify the theme file exists**: Check that a `.toml` file with the theme name exists in `~/.config/termcode/themes/` or `runtime/themes/`.
 2. **Check for TOML syntax errors**: Ensure the theme file is valid TOML. Common issues include missing quotes around strings or invalid hex color codes.
 3. **Hex color format**: Colors must be in `#rrggbb` format (6 hex digits, preceded by `#`). Short forms like `#fff` are not supported.
-4. **Runtime directory location**: termcode looks for themes in a `runtime/` directory next to the binary, then falls back to `runtime/` in the current working directory. Ensure themes are in the correct location.
+4. **Search order**: termcode looks for themes in: (1) `runtime/` next to the binary, (2) `~/.config/termcode/themes/`, (3) `runtime/` in the current working directory.
 
 ### Session Not Restoring
 

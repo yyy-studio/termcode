@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
-    sync_cursor_from_selection,
+    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
+    CommandRegistry,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -121,8 +121,11 @@ impl App {
         let plugin_manager = if app_config.plugins.enabled {
             match PluginManager::new(app_config.plugins.clone()) {
                 Ok(mut pm) => {
-                    let mut plugin_dirs =
-                        vec![termcode_config::default::runtime_dir().join("plugins")];
+                    let mut plugin_dirs: Vec<PathBuf> = termcode_config::default::runtime_dirs()
+                        .iter()
+                        .map(|d| d.join("plugins"))
+                        .filter(|d| d.exists())
+                        .collect();
                     for dir_str in &app_config.plugins.plugin_dirs {
                         plugin_dirs.push(termcode_plugin::expand_tilde(dir_str));
                     }
@@ -1037,10 +1040,18 @@ impl App {
     }
 
     fn apply_theme(&mut self, name: &str) {
-        let theme_path = termcode_config::default::runtime_dir()
-            .join("themes")
-            .join(format!("{name}.toml"));
-        match termcode_theme::loader::load_theme(&theme_path) {
+        let theme_file = format!("{name}.toml");
+        let theme_path = termcode_config::default::runtime_dirs()
+            .iter()
+            .map(|d| d.join("themes").join(&theme_file))
+            .find(|p| p.exists());
+
+        let Some(path) = theme_path else {
+            self.editor.status_message = Some(format!("Theme not found: {name}"));
+            return;
+        };
+
+        match termcode_theme::loader::load_theme(&path) {
             Ok(theme) => {
                 self.editor.switch_theme(theme);
                 self.editor.status_message = Some(format!("Theme: {name}"));
@@ -1747,21 +1758,33 @@ fn load_default_theme() -> Theme {
 }
 
 fn load_theme_by_name(name: &str) -> Result<Theme, termcode_theme::loader::ThemeError> {
-    let theme_path = termcode_config::default::runtime_dir()
+    let theme_file = format!("{name}.toml");
+    for dir in termcode_config::default::runtime_dirs() {
+        let path = dir.join("themes").join(&theme_file);
+        if path.exists() {
+            return termcode_theme::loader::load_theme(&path);
+        }
+    }
+    // Fallback: try runtime_dir (even if it doesn't exist, to get a proper error)
+    let fallback = termcode_config::default::runtime_dir()
         .join("themes")
-        .join(format!("{name}.toml"));
-    termcode_theme::loader::load_theme(&theme_path)
+        .join(&theme_file);
+    termcode_theme::loader::load_theme(&fallback)
 }
 
 fn list_available_themes() -> Vec<String> {
-    let themes_dir = termcode_config::default::runtime_dir().join("themes");
     let mut themes = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    themes.push(stem.to_string());
+    for dir in termcode_config::default::runtime_dirs() {
+        let themes_dir = dir.join("themes");
+        if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if !themes.contains(&stem.to_string()) {
+                            themes.push(stem.to_string());
+                        }
+                    }
                 }
             }
         }

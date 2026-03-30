@@ -31,19 +31,25 @@
 
 ## Installation
 
+### Pre-built binaries
+
+Download from [GitHub Releases](https://github.com/yyy-studio/termcode/releases):
+
+```bash
+# macOS (Apple Silicon)
+curl -LO https://github.com/yyy-studio/termcode/releases/latest/download/termcode-v0.1.1-aarch64-apple-darwin.tar.gz
+tar xzf termcode-v0.1.1-aarch64-apple-darwin.tar.gz
+sudo cp termcode-v0.1.1-aarch64-apple-darwin/termcode /usr/local/bin/
+```
+
+Available targets: macOS (arm64, x86_64), Linux (x86_64, aarch64), Windows (x86_64).
+
 ### From source (requires Rust 1.85+)
 
 ```bash
-git clone https://github.com/user/termcode.git
+git clone https://github.com/yyy-studio/termcode.git
 cd termcode
 cargo install --path .
-```
-
-### Build only
-
-```bash
-cargo build --release
-# Binary at target/release/termcode
 ```
 
 ## Features
@@ -132,7 +138,18 @@ All keybindings are customizable via `keybindings.toml`. See [Configuration](#co
 
 ## Configuration
 
-termcode looks for configuration in these locations (in order):
+termcode stores all user data under `~/.config/termcode/`:
+
+```
+~/.config/termcode/
+  config.toml          # editor settings
+  keybindings.toml     # custom keybindings
+  themes/              # custom themes (.toml)
+  plugins/             # Lua plugins
+  sessions/            # auto-saved sessions
+```
+
+Config is loaded from (in order):
 
 1. `~/.config/termcode/config.toml` -- user config
 2. `./config/config.toml` -- project-local override
@@ -188,7 +205,7 @@ Switch themes via the command palette (`Ctrl+Shift+P` > Themes).
 
 ### Custom Themes
 
-Create a `.toml` file in `runtime/themes/`:
+Create a `.toml` file in `~/.config/termcode/themes/`:
 
 ```toml
 [meta]
