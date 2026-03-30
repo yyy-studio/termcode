@@ -7,11 +7,12 @@ use termcode_theme::theme::Theme;
 
 pub struct PaneTitleWidget<'a> {
     theme: &'a Theme,
+    focused: bool,
 }
 
 impl<'a> PaneTitleWidget<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
-        Self { theme }
+    pub fn new(theme: &'a Theme, focused: bool) -> Self {
+        Self { theme, focused }
     }
 }
 
@@ -21,8 +22,17 @@ impl Widget for PaneTitleWidget<'_> {
             return;
         }
 
-        let fg = self.theme.ui.pane_inactive_fg.to_ratatui();
-        let bg = self.theme.ui.pane_inactive_bg.to_ratatui();
+        let (fg, bg) = if self.focused {
+            (
+                self.theme.ui.foreground.to_ratatui(),
+                self.theme.ui.tab_active_bg.to_ratatui(),
+            )
+        } else {
+            (
+                self.theme.ui.pane_inactive_fg.to_ratatui(),
+                self.theme.ui.pane_inactive_bg.to_ratatui(),
+            )
+        };
         let style = Style::default().fg(fg).bg(bg);
 
         for x in area.x..area.x + area.width {

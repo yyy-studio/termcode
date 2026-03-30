@@ -74,7 +74,7 @@ pub fn render(
     if let Some(title_area) = app_layout.sidebar_title {
         match editor.theme.ui.pane_focus_style {
             PaneFocusStyle::TitleBar => {
-                let w = PaneTitleWidget::new(&editor.theme);
+                let w = PaneTitleWidget::new(&editor.theme, is_sidebar_active);
                 frame.render_widget(w, title_area);
             }
             PaneFocusStyle::AccentLine => {
