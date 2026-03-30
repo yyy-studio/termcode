@@ -348,12 +348,10 @@ mod tests {
 
         let result = manager.register_hook("on_invalid", "test-plugin".into(), key);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("unknown hook name")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown hook name"));
     }
 
     #[test]
@@ -408,7 +406,7 @@ mod tests {
 
         for name in &["plugin-a", "plugin-b", "plugin-c"] {
             let func = lua
-                .load(&format!(
+                .load(format!(
                     r#"function(ctx) table.insert(_order, "{}") end"#,
                     name
                 ))

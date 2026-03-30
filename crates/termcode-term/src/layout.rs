@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(ep.width, 60);
         // Content areas are inset by 1 on each side
         let sidebar = layout.sidebar.unwrap();
-        assert_eq!(sidebar.width, 18 - 0); // 20 - 2 borders, minus 0 for title split
+        assert_eq!(sidebar.width, 18); // 20 - 2 borders
         let title = layout.sidebar_title.unwrap();
         assert_eq!(title.width, 18);
         assert_eq!(layout.tab_bar.width, 58);
