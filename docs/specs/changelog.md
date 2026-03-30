@@ -1,5 +1,18 @@
 # Specification Change History
 
+## [2026-03-30] Unsaved Changes Confirmation Dialog specification
+
+### Added
+
+- [FR-CONFIRM-001] ConfirmDialog state struct in Editor
+- [FR-CONFIRM-002] Ctrl+W close modified file with confirmation
+- [FR-CONFIRM-003] Ctrl+Q quit with unsaved files confirmation
+- [FR-CONFIRM-004] Dialog button actions (save/discard/cancel)
+- [FR-CONFIRM-005] Keyboard navigation within dialog
+- [FR-CONFIRM-006] Dialog widget rendering (centered overlay popup)
+
+**Specification file**: `docs/specs/confirm-dialog.md`
+
 ## [2026-03-29] Phase 5: Plugin System specification
 
 ### Added

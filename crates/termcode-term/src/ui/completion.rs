@@ -6,7 +6,7 @@ use ratatui::widgets::Widget;
 use termcode_theme::theme::Theme;
 use termcode_view::editor::CompletionState;
 
-use super::overlay::{render_result_list, ListItem};
+use super::overlay::{ListItem, render_result_list};
 
 const MAX_VISIBLE_ITEMS: usize = 10;
 const MAX_WIDTH: u16 = 40;

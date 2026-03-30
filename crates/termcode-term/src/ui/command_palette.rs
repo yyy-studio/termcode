@@ -6,8 +6,8 @@ use termcode_theme::theme::Theme;
 use termcode_view::palette::CommandPaletteState;
 
 use super::overlay::{
-    compute_overlay_rect, render_input_line, render_overlay_frame, render_result_list, ListItem,
-    OverlayConfig, OverlayPosition,
+    ListItem, OverlayConfig, OverlayPosition, compute_overlay_rect, render_input_line,
+    render_overlay_frame, render_result_list,
 };
 
 pub struct CommandPaletteWidget<'a> {

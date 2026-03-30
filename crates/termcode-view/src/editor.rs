@@ -9,6 +9,7 @@ use termcode_theme::theme::Theme;
 use termcode_core::position::Position;
 
 use crate::clipboard::ClipboardProvider;
+use crate::confirm::ConfirmDialog;
 use crate::document::{Document, DocumentId};
 use crate::file_explorer::FileExplorer;
 use crate::fuzzy::FuzzyFinderState;
@@ -72,6 +73,7 @@ pub struct Editor {
     pub completion: CompletionState,
     pub hover: HoverState,
     pub help_visible: bool,
+    pub confirm_dialog: Option<ConfirmDialog>,
     pub clipboard: Option<Box<dyn ClipboardProvider>>,
     pub images: HashMap<ImageId, ImageEntry>,
     next_doc_id: usize,
@@ -117,6 +119,7 @@ impl Editor {
             completion: CompletionState::default(),
             hover: HoverState::default(),
             help_visible: false,
+            confirm_dialog: None,
             clipboard: None,
             images: HashMap::new(),
             next_doc_id: 0,

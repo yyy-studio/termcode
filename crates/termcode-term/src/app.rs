@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
-    CommandRegistry,
+    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
+    sync_cursor_from_selection,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -393,6 +393,9 @@ impl App {
     }
 
     fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) {
+        if self.editor.confirm_dialog.is_some() {
+            return;
+        }
         let (w, h) = self.terminal_size;
         let area = ratatui::layout::Rect::new(0, 0, w, h);
         let app_layout = layout::compute_layout(
@@ -489,8 +492,14 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        // Confirm dialog intercept: consume ALL keys while dialog is active
+        if self.editor.confirm_dialog.is_some() {
+            self.handle_confirm_key(key);
+            return;
+        }
+
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
-            self.should_quit = true;
+            self.handle_quit();
             return;
         }
 
@@ -534,7 +543,7 @@ impl App {
         }
 
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('w') {
-            self.handle_close_tab();
+            self.handle_close_tab_with_confirm();
             return;
         }
 
@@ -1105,6 +1114,223 @@ impl App {
         } else {
             self.sync_active_view_to_tab();
         }
+    }
+
+    fn handle_quit(&mut self) {
+        let modified_count = self
+            .editor
+            .documents
+            .values()
+            .filter(|doc| doc.is_modified())
+            .count();
+
+        if modified_count == 0 {
+            self.should_quit = true;
+        } else {
+            use termcode_view::confirm::{ConfirmAction, ConfirmDialog};
+            let message = format!("저장되지 않은 파일이 {modified_count}개 있습니다.");
+            let buttons = vec![
+                "전부 저장 후 종료".to_string(),
+                "저장 안 하고 종료".to_string(),
+                "취소".to_string(),
+            ];
+            self.editor.confirm_dialog =
+                Some(ConfirmDialog::new(ConfirmAction::QuitAll, message, buttons));
+        }
+    }
+
+    fn handle_close_tab_with_confirm(&mut self) {
+        use termcode_view::confirm::{ConfirmAction, ConfirmDialog};
+        use termcode_view::image::TabContent;
+
+        if let Some(tab) = self.editor.tabs.active_tab() {
+            match tab.content {
+                TabContent::Document(doc_id) => {
+                    let doc = self.editor.documents.get(&doc_id);
+                    let is_modified = doc.is_some_and(|d| d.is_modified());
+                    if is_modified {
+                        let name = doc
+                            .map(|d| d.display_name().to_string())
+                            .unwrap_or_else(|| "Untitled".to_string());
+                        let message = format!("'{name}'에 저장되지 않은 변경 사항이 있습니다.");
+                        let buttons = vec![
+                            "저장 후 닫기".to_string(),
+                            "저장 안 하고 닫기".to_string(),
+                            "취소".to_string(),
+                        ];
+                        self.editor.confirm_dialog = Some(ConfirmDialog::new(
+                            ConfirmAction::CloseTab(doc_id),
+                            message,
+                            buttons,
+                        ));
+                    } else {
+                        self.handle_close_tab();
+                    }
+                }
+                TabContent::Image(_) => {
+                    self.handle_close_tab();
+                }
+            }
+        }
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Left | KeyCode::BackTab => {
+                if let Some(ref mut dialog) = self.editor.confirm_dialog {
+                    dialog.select_prev();
+                }
+            }
+            KeyCode::Right | KeyCode::Tab => {
+                if let Some(ref mut dialog) = self.editor.confirm_dialog {
+                    dialog.select_next();
+                }
+            }
+            KeyCode::Esc => {
+                self.editor.confirm_dialog = None;
+            }
+            KeyCode::Enter => {
+                self.execute_confirm_action();
+            }
+            _ => {}
+        }
+    }
+
+    fn execute_confirm_action(&mut self) {
+        use termcode_view::confirm::ConfirmAction;
+
+        let dialog = match self.editor.confirm_dialog.take() {
+            Some(d) => d,
+            None => return,
+        };
+        let button = dialog.selected_button;
+
+        match dialog.action {
+            ConfirmAction::CloseTab(doc_id) => {
+                // Button 0: Save + Close, Button 1: Discard, Button 2: Cancel
+                match button {
+                    0 => {
+                        if !self.editor.documents.contains_key(&doc_id) {
+                            return;
+                        }
+                        match self.editor.save_document(doc_id) {
+                            Ok(()) => {
+                                self.lsp_notify_did_save_doc(doc_id);
+                                let (path, filename) = self.doc_path_info(doc_id);
+                                self.dispatch_plugin_hook(HookEvent::OnSave { path, filename });
+                                self.close_tab_for_doc(doc_id);
+                            }
+                            Err(e) => {
+                                self.editor.status_message = Some(format!("저장 실패: {e}"));
+                            }
+                        }
+                    }
+                    1 => {
+                        if self.editor.documents.contains_key(&doc_id) {
+                            self.close_tab_for_doc(doc_id);
+                        }
+                    }
+                    _ => {
+                        // Cancel -- dialog already dismissed via .take()
+                    }
+                }
+            }
+            ConfirmAction::QuitAll => {
+                // Button 0: Save all + Quit, Button 1: Discard + Quit, Button 2: Cancel
+                match button {
+                    0 => {
+                        let modified_ids: Vec<_> = self
+                            .editor
+                            .documents
+                            .iter()
+                            .filter(|(_, doc)| doc.is_modified())
+                            .map(|(id, _)| *id)
+                            .collect();
+                        for doc_id in modified_ids {
+                            match self.editor.save_document(doc_id) {
+                                Ok(()) => {
+                                    self.lsp_notify_did_save_doc(doc_id);
+                                    let (path, filename) = self.doc_path_info(doc_id);
+                                    self.dispatch_plugin_hook(HookEvent::OnSave { path, filename });
+                                }
+                                Err(e) => {
+                                    self.editor.status_message = Some(format!("저장 실패: {e}"));
+                                    return;
+                                }
+                            }
+                        }
+                        self.should_quit = true;
+                    }
+                    1 => {
+                        self.should_quit = true;
+                    }
+                    _ => {
+                        // Cancel
+                    }
+                }
+            }
+        }
+    }
+
+    fn close_tab_for_doc(&mut self, doc_id: termcode_view::document::DocumentId) {
+        let doc = self.editor.documents.get(&doc_id);
+        let close_path = doc
+            .and_then(|d| d.path.as_ref())
+            .map(|p| p.display().to_string());
+        let close_filename = doc
+            .and_then(|d| d.path.as_ref())
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string());
+        self.dispatch_plugin_hook(HookEvent::OnClose {
+            path: close_path,
+            filename: close_filename,
+        });
+        self.lsp_notify_did_close(doc_id);
+        self.editor.close_document(doc_id);
+
+        if self.editor.tabs.tabs.is_empty() {
+            self.editor.active_view = None;
+        } else {
+            self.sync_active_view_to_tab();
+        }
+    }
+
+    fn doc_path_info(
+        &self,
+        doc_id: termcode_view::document::DocumentId,
+    ) -> (Option<String>, Option<String>) {
+        if let Some(doc) = self.editor.documents.get(&doc_id) {
+            let path = doc.path.as_ref().map(|p| p.display().to_string());
+            let filename = doc
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string());
+            (path, filename)
+        } else {
+            (None, None)
+        }
+    }
+
+    fn lsp_notify_did_save_doc(&self, doc_id: termcode_view::document::DocumentId) {
+        let bridge = match &self.lsp_bridge {
+            Some(b) => b,
+            None => return,
+        };
+        let doc = match self.editor.documents.get(&doc_id) {
+            Some(d) => d,
+            None => return,
+        };
+        let language = match &doc.language_id {
+            Some(id) => id.as_ref().to_string(),
+            None => return,
+        };
+        let path = match &doc.path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let uri = make_file_uri(&path);
+        bridge.notify_did_save(&language, &uri);
     }
 
     fn sync_active_view_to_tab(&mut self) {

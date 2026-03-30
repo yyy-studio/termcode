@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use ratatui::Frame;
 use ratatui::style::Style as RatStyle;
 use ratatui::widgets::{Block, Borders};
-use ratatui::Frame;
 
 use ratatui_image::protocol::StatefulProtocol;
 use termcode_view::editor::{Editor, EditorMode};
@@ -14,6 +14,7 @@ use termcode_theme::theme::PaneFocusStyle;
 use crate::layout::{self, AppLayout};
 use crate::ui::command_palette::CommandPaletteWidget;
 use crate::ui::completion::CompletionWidget;
+use crate::ui::confirm_dialog::ConfirmDialogWidget;
 use crate::ui::editor_view::EditorViewWidget;
 use crate::ui::file_explorer::FileExplorerWidget;
 use crate::ui::fuzzy_finder::FuzzyFinderWidget;
@@ -185,6 +186,12 @@ pub fn render(
     if editor.help_visible {
         let help_widget = HelpPopupWidget::new(&editor.theme);
         frame.render_widget(help_widget, area);
+    }
+
+    // Confirm dialog overlay (highest z-order)
+    if let Some(ref dialog) = editor.confirm_dialog {
+        let confirm_widget = ConfirmDialogWidget::new(dialog, &editor.theme);
+        frame.render_widget(confirm_widget, area);
     }
 }
 

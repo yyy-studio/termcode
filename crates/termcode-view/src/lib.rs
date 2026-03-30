@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod confirm;
 pub mod document;
 pub mod editor;
 pub mod file_explorer;

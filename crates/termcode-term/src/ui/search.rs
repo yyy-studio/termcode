@@ -6,7 +6,7 @@ use termcode_theme::theme::Theme;
 use termcode_view::search::SearchState;
 
 use super::overlay::{
-    compute_overlay_rect, render_input_line, render_overlay_frame, OverlayConfig, OverlayPosition,
+    OverlayConfig, OverlayPosition, compute_overlay_rect, render_input_line, render_overlay_frame,
 };
 
 pub struct SearchOverlayWidget<'a> {

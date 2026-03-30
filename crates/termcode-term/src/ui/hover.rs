@@ -95,6 +95,12 @@ impl Widget for HoverWidget<'_> {
             self.cursor_y + 1
         };
 
+        // Clamp popup to fit within the buffer area.
+        let width = width.min(buf.area.width.saturating_sub(x));
+        let height = height.min(buf.area.height.saturating_sub(y));
+        if width < 4 || height < 3 {
+            return;
+        }
         let popup_rect = Rect::new(x, y, width, height);
 
         let bg = self.theme.ui.sidebar_bg.to_ratatui();
