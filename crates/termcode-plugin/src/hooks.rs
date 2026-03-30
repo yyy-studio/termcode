@@ -182,6 +182,19 @@ impl HookManager {
 
         Ok(())
     }
+
+    /// Remove all hook listeners registered by a plugin.
+    /// Returns the number of removed listeners.
+    pub fn remove_hooks_for_plugin(&mut self, plugin_name: &str) -> usize {
+        let mut removed = 0usize;
+        self.hooks.retain(|_, listeners| {
+            let before = listeners.len();
+            listeners.retain(|(name, _)| name != plugin_name);
+            removed += before - listeners.len();
+            !listeners.is_empty()
+        });
+        removed
+    }
 }
 
 /// Convert a HookContext into a Lua table.

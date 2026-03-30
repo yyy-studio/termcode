@@ -29,12 +29,7 @@ fn main() {
         None => (None, None),
     };
 
-    let show_sidebar = file.is_none();
     let mut app = App::new(root);
-
-    if show_sidebar {
-        app.show_sidebar();
-    }
 
     if let Some(path) = &file {
         if let Err(e) = app.open_file(path) {
@@ -42,6 +37,7 @@ fn main() {
             process::exit(1);
         }
     } else {
+        app.focus_sidebar_if_visible();
         app.restore_session();
     }
 

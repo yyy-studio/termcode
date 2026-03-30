@@ -375,6 +375,12 @@ impl PluginManager {
             .set("active", false)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
+        // If an earlier plugin with the same name exists, remove its registered
+        // commands/hooks now (after init succeeded, before new registrations commit).
+        if self.plugins.iter().any(|p| p.name == plugin_name) {
+            self.remove_plugin_artifacts(plugin_name);
+        }
+
         // Collect registered commands
         let commands_table: mlua::Table = self
             .lua
@@ -577,6 +583,25 @@ impl PluginManager {
     /// Returns true if there are any registered commands matching the prefix.
     pub fn has_command(&self, name: &str) -> bool {
         self.commands.contains_key(name)
+    }
+
+    fn remove_plugin_artifacts(&mut self, plugin_name: &str) {
+        let prefix = format!("plugin.{plugin_name}.");
+
+        let commands_before = self.commands.len();
+        self.commands.retain(|id, _| !id.starts_with(&prefix));
+        let removed_commands = commands_before.saturating_sub(self.commands.len());
+
+        let removed_hooks = self.hooks.remove_hooks_for_plugin(plugin_name);
+
+        if removed_commands > 0 || removed_hooks > 0 {
+            log::debug!(
+                "Removed stale artifacts for plugin '{}': {} commands, {} hooks",
+                plugin_name,
+                removed_commands,
+                removed_hooks
+            );
+        }
     }
 }
 

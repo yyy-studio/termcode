@@ -13,7 +13,6 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
-use termcode_core::config_types::EditorConfig;
 use termcode_lsp::types::LspResponse;
 use termcode_syntax::language::LanguageRegistry;
 use termcode_theme::loader::parse_theme;
@@ -73,11 +72,32 @@ impl App {
     }
 
     pub fn with_config(root: Option<PathBuf>, app_config: AppConfig) -> Self {
-        let theme = load_default_theme();
-        let config = EditorConfig::default();
+        let (theme, startup_theme_status) = match load_theme_by_name(&app_config.theme) {
+            Ok(theme) => (theme, None),
+            Err(e) => {
+                log::warn!(
+                    "Failed to load theme '{}': {}. Falling back to built-in one-dark",
+                    app_config.theme,
+                    e
+                );
+                (
+                    load_default_theme(),
+                    Some(format!(
+                        "Failed to load theme '{}': {e} (using one-dark)",
+                        app_config.theme
+                    )),
+                )
+            }
+        };
+        let config = app_config.editor.clone();
         let lang_registry = LanguageRegistry::with_builtins();
         let mut editor = Editor::new(theme, config, lang_registry, root);
         editor.file_tree_style = app_config.ui.file_tree_style;
+        editor.file_explorer.width = app_config.ui.sidebar_width;
+        editor.file_explorer.visible = app_config.ui.sidebar_visible;
+        if let Some(msg) = startup_theme_status {
+            editor.status_message = Some(msg);
+        }
         editor.clipboard = Some(Box::new(crate::clipboard::ArboardClipboard::new()));
 
         let mut command_registry = CommandRegistry::new();
@@ -155,6 +175,12 @@ impl App {
         self.editor.switch_mode(EditorMode::FileExplorer);
     }
 
+    pub fn focus_sidebar_if_visible(&mut self) {
+        if self.editor.file_explorer.visible {
+            self.editor.switch_mode(EditorMode::FileExplorer);
+        }
+    }
+
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<()> {
         if is_image_extension(path) {
             self.open_image_file(path)?;
@@ -210,75 +236,87 @@ impl App {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut terminal = setup_terminal(self.editor.config.mouse_enabled)?;
 
-        terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
-
-        self.dispatch_plugin_hook(HookEvent::OnReady);
-
-        loop {
-            while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
-                self.update(lsp_event);
-            }
-
-            let prev_mode = self.editor.mode;
-            let prev_active_tab = self.editor.tabs.active;
-            let prev_cursor = self
-                .editor
-                .active_view()
-                .map(|v| (v.cursor.line, v.cursor.column));
-
-            let event = self.event_handler.next()?;
-            self.update(event);
-
-            if self.should_quit {
-                break;
-            }
-
-            self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
-
-            {
-                let size = terminal.size()?;
-                self.terminal_size = (size.width, size.height);
-                let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-                let app_layout = layout::compute_layout(
-                    area,
-                    self.editor.file_explorer.visible,
-                    self.editor.file_explorer.width,
-                    self.editor.theme.ui.pane_focus_style,
-                    self.editor.theme.ui.panel_borders,
-                );
-                if let Some(view) = self.editor.active_view_mut() {
-                    view.area_height = app_layout.editor_area.height;
-                    view.area_width = app_layout.editor_area.width;
-                }
-                if let Some(sidebar) = app_layout.sidebar {
-                    self.editor.file_explorer.viewport_height = sidebar.height as usize;
-                }
-
-                // Must match max_height values in FuzzyFinderWidget / CommandPaletteWidget
-                const FUZZY_MAX_HEIGHT: u16 = 20;
-                const PALETTE_MAX_HEIGHT: u16 = 15;
-                const OVERLAY_CHROME: usize = 3; // top border + input + bottom border
-
-                let fuzzy_height = FUZZY_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
-                self.editor.fuzzy_finder.visible_height =
-                    fuzzy_height.saturating_sub(OVERLAY_CHROME);
-                let palette_height = PALETTE_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
-                self.editor.command_palette.visible_height =
-                    palette_height.saturating_sub(OVERLAY_CHROME);
-            }
-
-            self.editor.sync_tab_modified();
+        let app_result = (|| -> anyhow::Result<()> {
             terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
-        }
+
+            self.dispatch_plugin_hook(HookEvent::OnReady);
+
+            loop {
+                while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
+                    self.update(lsp_event);
+                }
+
+                let prev_mode = self.editor.mode;
+                let prev_active_tab = self.editor.tabs.active;
+                let prev_cursor = self
+                    .editor
+                    .active_view()
+                    .map(|v| (v.cursor.line, v.cursor.column));
+
+                let event = self.event_handler.next()?;
+                self.update(event);
+
+                if self.should_quit {
+                    break;
+                }
+
+                self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
+
+                {
+                    let size = terminal.size()?;
+                    self.terminal_size = (size.width, size.height);
+                    let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+                    let app_layout = layout::compute_layout(
+                        area,
+                        self.editor.file_explorer.visible,
+                        self.editor.file_explorer.width,
+                        self.editor.theme.ui.pane_focus_style,
+                        self.editor.theme.ui.panel_borders,
+                    );
+                    if let Some(view) = self.editor.active_view_mut() {
+                        view.area_height = app_layout.editor_area.height;
+                        view.area_width = app_layout.editor_area.width;
+                    }
+                    if let Some(sidebar) = app_layout.sidebar {
+                        self.editor.file_explorer.viewport_height = sidebar.height as usize;
+                    }
+
+                    // Must match max_height values in FuzzyFinderWidget / CommandPaletteWidget
+                    const FUZZY_MAX_HEIGHT: u16 = 20;
+                    const PALETTE_MAX_HEIGHT: u16 = 15;
+                    const OVERLAY_CHROME: usize = 3; // top border + input + bottom border
+
+                    let fuzzy_height = FUZZY_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
+                    self.editor.fuzzy_finder.visible_height =
+                        fuzzy_height.saturating_sub(OVERLAY_CHROME);
+                    let palette_height =
+                        PALETTE_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
+                    self.editor.command_palette.visible_height =
+                        palette_height.saturating_sub(OVERLAY_CHROME);
+                }
+
+                self.editor.sync_tab_modified();
+                terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
+            }
+
+            Ok(())
+        })();
 
         if let Some(ref bridge) = self.lsp_bridge {
             bridge.shutdown();
         }
-
         self.save_session();
 
-        restore_terminal(&mut terminal, self.mouse_enabled)?;
-        Ok(())
+        let restore_result = restore_terminal(&mut terminal, self.mouse_enabled);
+
+        match (app_result, restore_result) {
+            (Err(app_err), Err(restore_err)) => Err(anyhow::anyhow!(
+                "{app_err}; additionally failed to restore terminal: {restore_err}"
+            )),
+            (Err(app_err), Ok(())) => Err(app_err),
+            (Ok(()), Err(restore_err)) => Err(restore_err),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 
     pub fn restore_session(&mut self) {
@@ -326,6 +364,9 @@ impl App {
             .collect();
 
         if files.is_empty() {
+            if let Err(e) = crate::session::clear_session(&root) {
+                log::warn!("Failed to clear session: {e}");
+            }
             return;
         }
 
@@ -1015,11 +1056,8 @@ impl App {
             if let Some(view_id) = self.editor.find_view_by_doc_id(doc_id) {
                 self.editor.active_view = Some(view_id);
             }
-        } else {
-            match self.editor.open_file(path) {
-                Ok((doc_id, _)) => self.lsp_notify_did_open(doc_id),
-                Err(e) => self.editor.status_message = Some(format!("Error: {e}")),
-            }
+        } else if let Err(e) = self.open_file(path) {
+            self.editor.status_message = Some(format!("Error: {e}"));
         }
     }
 
@@ -1412,6 +1450,8 @@ fn is_document_mutation(cmd_id: &str) -> bool {
             | "edit.newline"
             | "edit.undo"
             | "edit.redo"
+            | "clipboard.cut"
+            | "clipboard.paste"
             | "search.replace_current"
             | "search.replace_all"
     )
@@ -1441,6 +1481,13 @@ fn load_default_theme() -> Theme {
     parse_theme(theme_toml).unwrap_or_default()
 }
 
+fn load_theme_by_name(name: &str) -> Result<Theme, termcode_theme::loader::ThemeError> {
+    let theme_path = termcode_config::default::runtime_dir()
+        .join("themes")
+        .join(format!("{name}.toml"));
+    termcode_theme::loader::load_theme(&theme_path)
+}
+
 fn list_available_themes() -> Vec<String> {
     let themes_dir = termcode_config::default::runtime_dir().join("themes");
     let mut themes = Vec::new();
@@ -1461,14 +1508,34 @@ fn list_available_themes() -> Vec<String> {
 fn setup_terminal(mouse_enabled: bool) -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    if mouse_enabled {
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    } else {
+    let mut entered_alt_screen = false;
+    let mut mouse_captured = false;
+
+    let setup_result = (|| -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
         execute!(stdout, EnterAlternateScreen)?;
+        entered_alt_screen = true;
+        if mouse_enabled {
+            execute!(stdout, EnableMouseCapture)?;
+            mouse_captured = true;
+        }
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = Terminal::new(backend)?;
+        Ok(terminal)
+    })();
+
+    if let Err(e) = setup_result {
+        let mut cleanup_stdout = io::stdout();
+        if mouse_enabled && mouse_captured {
+            let _ = execute!(cleanup_stdout, DisableMouseCapture);
+        }
+        if entered_alt_screen {
+            let _ = execute!(cleanup_stdout, LeaveAlternateScreen);
+        }
+        let _ = disable_raw_mode();
+        return Err(e);
     }
-    let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend)?;
-    Ok(terminal)
+
+    setup_result
 }
 
 fn restore_terminal(

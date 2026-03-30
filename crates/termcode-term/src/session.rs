@@ -45,6 +45,15 @@ pub fn save_session(session: &Session) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn clear_session(root: &Path) -> anyhow::Result<()> {
+    let path = session_path(root);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn load_session(root: &Path) -> Option<Session> {
     let path = session_path(root);
     let content = std::fs::read_to_string(&path).ok()?;
