@@ -590,6 +590,24 @@ impl App {
                 return;
             }
 
+            if key.code == KeyCode::Tab && key.modifiers.is_empty() {
+                let text = if self.editor.config.insert_spaces {
+                    " ".repeat(self.editor.config.tab_size)
+                } else {
+                    "\t".to_string()
+                };
+                for c in text.chars() {
+                    if let Err(e) = insert_char(&mut self.editor, c) {
+                        self.editor.status_message = Some(format!("Error: {e}"));
+                        break;
+                    }
+                }
+                self.lsp_notify_did_change();
+                let (path, filename) = self.active_doc_path_info();
+                self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
+                return;
+            }
+
             if let KeyCode::Char(c) = key.code {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                     if let Err(e) = insert_char(&mut self.editor, c) {
