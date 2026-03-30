@@ -96,6 +96,7 @@ impl Editor {
             visible: false,
             width: 30,
             viewport_height: 0,
+            scroll_left: 0,
         });
 
         Self {

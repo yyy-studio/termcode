@@ -598,8 +598,14 @@ impl App {
         if self.editor.mode == EditorMode::FileExplorer {
             if let Some(cmd_id) = self.input_mapper.resolve(EditorMode::FileExplorer, key) {
                 match cmd_id {
-                    "explorer.down" => self.editor.file_explorer.move_selection(1),
-                    "explorer.up" => self.editor.file_explorer.move_selection(-1),
+                    "explorer.down" => {
+                        let style = self.editor.file_tree_style;
+                        self.editor.file_explorer.move_selection(1, &style);
+                    }
+                    "explorer.up" => {
+                        let style = self.editor.file_tree_style;
+                        self.editor.file_explorer.move_selection(-1, &style);
+                    }
                     "explorer.enter" => self.handle_explorer_enter(),
                     "explorer.expand" => self.handle_explorer_expand(),
                     "explorer.collapse" => self.handle_explorer_collapse(),
@@ -1129,6 +1135,9 @@ impl App {
                 if let Err(e) = self.editor.file_explorer.toggle_expand(selected) {
                     self.editor.status_message = Some(format!("Error: {e}"));
                 }
+                self.editor
+                    .file_explorer
+                    .compute_scroll_left(&self.editor.file_tree_style);
             }
             FileNodeKind::File | FileNodeKind::Symlink => {
                 let path = self.editor.file_explorer.tree[selected].path.clone();
@@ -1148,6 +1157,9 @@ impl App {
             if let Err(e) = self.editor.file_explorer.toggle_expand(selected) {
                 self.editor.status_message = Some(format!("Error: {e}"));
             }
+            self.editor
+                .file_explorer
+                .compute_scroll_left(&self.editor.file_tree_style);
         }
     }
 
@@ -1161,6 +1173,9 @@ impl App {
             if let Err(e) = self.editor.file_explorer.toggle_expand(selected) {
                 self.editor.status_message = Some(format!("Error: {e}"));
             }
+            self.editor
+                .file_explorer
+                .compute_scroll_left(&self.editor.file_tree_style);
         } else {
             let current_depth = node.depth;
             if current_depth > 0 {

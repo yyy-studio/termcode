@@ -125,8 +125,25 @@ impl Widget for FileExplorerWidget<'_> {
 
         let nodes = self.explorer.flatten_visible();
         let offset = self.explorer.scroll_offset;
+        let scroll_left = self.explorer.scroll_left;
         let use_tree = self.file_tree_style.tree_style;
         let use_emoji = self.file_tree_style.show_file_type_emoji;
+
+        // Helper: write a character at logical_x, applying scroll_left offset.
+        // Returns the new logical_x after the character.
+        let put_char =
+            |logical_x: u16, ch: char, w: u16, style: Style, y: u16, buf: &mut Buffer| -> u16 {
+                if logical_x + w > scroll_left && logical_x < scroll_left + area.width {
+                    let screen_x = area.x + logical_x.saturating_sub(scroll_left);
+                    if screen_x + w <= area.x + area.width {
+                        buf[(screen_x, y)].set_char(ch).set_style(style);
+                        for i in 1..w {
+                            buf[(screen_x + i, y)].set_char(' ').set_style(style);
+                        }
+                    }
+                }
+                logical_x + w
+            };
 
         for (vi, node) in nodes.iter().enumerate().skip(offset) {
             let row = (vi - offset) as u16;
@@ -148,61 +165,60 @@ impl Widget for FileExplorerWidget<'_> {
                 }
             }
 
-            let mut x = area.x;
+            let mut lx: u16 = 0;
 
             if use_tree {
-                // Tree-line prefix
                 let prefix = build_tree_prefix(nodes, vi);
                 for ch in prefix.chars() {
-                    if x < area.x + area.width {
-                        buf[(x, y)].set_char(ch).set_style(style);
-                        x += 1;
-                    }
+                    lx = put_char(lx, ch, 1, style, y, buf);
                 }
             } else {
-                // No tree lines: indent by depth
-                let indent = node.depth * 2;
-                x += indent as u16;
+                lx += (node.depth * 2) as u16;
             }
 
             if use_emoji {
-                // Emoji icon based on file type (from theme icons)
                 let icons = &self.theme.icons;
                 let icon_str = match node.kind {
                     FileNodeKind::Directory if node.expanded => &icons.directory_open,
                     FileNodeKind::Directory => &icons.directory_closed,
                     _ => icons.file_icon(&node.name),
                 };
-                // Render icon + trailing space
                 let icon = format!("{icon_str} ");
                 for ch in icon.chars() {
                     let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
-                    if x + w <= area.x + area.width {
-                        buf[(x, y)].set_char(ch).set_style(style);
-                        // For wide chars, mark following cells as continuation
-                        for i in 1..w {
-                            buf[(x + i, y)].set_char(' ').set_style(style);
-                        }
-                        x += w;
-                    }
+                    lx = put_char(lx, ch, w, style, y, buf);
                 }
             }
 
-            // Name (clipped to sidebar width)
-            for ch in node.name.chars() {
-                if x >= area.x + area.width {
+            // Name (with ellipsis when truncated)
+            let right_edge = scroll_left + area.width;
+            let mut name_chars = node.name.chars().peekable();
+            while let Some(ch) = name_chars.next() {
+                if lx >= right_edge {
                     break;
                 }
                 let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
-                if x + w <= area.x + area.width {
-                    buf[(x, y)].set_char(ch).set_style(style);
-                    for i in 1..w {
-                        buf[(x + i, y)].set_char(' ').set_style(style);
+                // Check if this char fits but there are more chars that won't
+                if lx + w < right_edge && name_chars.peek().is_some() {
+                    // Check if next char would overflow
+                    let next_w = name_chars
+                        .peek()
+                        .map(|c| unicode_width::UnicodeWidthChar::width(*c).unwrap_or(1) as u16)
+                        .unwrap_or(0);
+                    if lx + w + next_w > right_edge {
+                        // Next char won't fit — show ellipsis instead of current char
+                        put_char(lx, '\u{2026}', 1, style, y, buf);
+                        break;
                     }
-                    x += w;
-                } else {
+                }
+                if lx + w > right_edge {
+                    // Current char doesn't fit — replace with ellipsis
+                    if lx < right_edge {
+                        put_char(lx, '\u{2026}', 1, style, y, buf);
+                    }
                     break;
                 }
+                lx = put_char(lx, ch, w, style, y, buf);
             }
         }
     }

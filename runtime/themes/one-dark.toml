@@ -40,8 +40,8 @@ pane_inactive_fg = "gutter"
 pane_inactive_bg = "#21252b"
 
 [icons]
-directory_open = "▶"
-directory_closed = "▼"
+directory_open = "▼"
+directory_closed = "▶"
 file_default = "📄"
 
 [icons.extensions]

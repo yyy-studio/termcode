@@ -50,12 +50,15 @@ impl InputMapper {
             (key(none, KeyCode::Left), "cursor.left"),
             (key(none, KeyCode::Char('l')), "cursor.right"),
             (key(none, KeyCode::Right), "cursor.right"),
+            (key(none, KeyCode::Char('0')), "cursor.line_start"),
+            (key(none, KeyCode::Char('$')), "cursor.line_end"),
+            (key(shift, KeyCode::Char('$')), "cursor.line_end"),
             (key(none, KeyCode::PageDown), "cursor.page_down"),
             (key(none, KeyCode::PageUp), "cursor.page_up"),
             (key(none, KeyCode::Char('g')), "cursor.home"),
-            (key(none, KeyCode::Home), "cursor.home"),
+            (key(none, KeyCode::Home), "cursor.line_start"),
             (key(shift, KeyCode::Char('G')), "cursor.end"),
-            (key(none, KeyCode::End), "cursor.end"),
+            (key(none, KeyCode::End), "cursor.line_end"),
             (key(none, KeyCode::Char('i')), "mode.insert"),
             (key(none, KeyCode::Char('x')), "edit.delete_char"),
             (key(none, KeyCode::Delete), "edit.delete_char"),
@@ -78,6 +81,8 @@ impl InputMapper {
             (key(none, KeyCode::Down), "cursor.down"),
             (key(none, KeyCode::Left), "cursor.left"),
             (key(none, KeyCode::Right), "cursor.right"),
+            (key(none, KeyCode::Home), "cursor.line_start"),
+            (key(none, KeyCode::End), "cursor.line_end"),
         ];
 
         let file_explorer = vec![

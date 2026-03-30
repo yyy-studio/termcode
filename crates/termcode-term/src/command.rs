@@ -133,6 +133,16 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
         handler: cmd_page_down,
     });
     registry.register(CommandEntry {
+        id: "cursor.line_start",
+        name: "Go to Line Start",
+        handler: cmd_line_start,
+    });
+    registry.register(CommandEntry {
+        id: "cursor.line_end",
+        name: "Go to Line End",
+        handler: cmd_line_end,
+    });
+    registry.register(CommandEntry {
         id: "cursor.home",
         name: "Go to Beginning",
         handler: cmd_home,
@@ -554,6 +564,46 @@ fn cmd_page_down(editor: &mut Editor) -> anyhow::Result<()> {
         view.scroll_down(page, line_count);
     }
     clamp_cursor_column(editor);
+    sync_selection_from_cursor(editor);
+    Ok(())
+}
+
+fn cmd_line_start(editor: &mut Editor) -> anyhow::Result<()> {
+    if let Some(view) = editor.active_view_mut() {
+        view.cursor.column = 0;
+    }
+    sync_selection_from_cursor(editor);
+    Ok(())
+}
+
+fn cmd_line_end(editor: &mut Editor) -> anyhow::Result<()> {
+    let max_col = {
+        let doc = match editor.active_document() {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        let view = match editor.active_view() {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        let line = view.cursor.line;
+        if line >= doc.buffer.line_count() {
+            return Ok(());
+        }
+        let line_text: String = doc.buffer.line(line).into();
+        let len = line_text
+            .trim_end_matches(&['\n', '\r'][..])
+            .chars()
+            .count();
+        if editor.mode == EditorMode::Insert {
+            len
+        } else {
+            len.saturating_sub(1)
+        }
+    };
+    if let Some(view) = editor.active_view_mut() {
+        view.cursor.column = max_col;
+    }
     sync_selection_from_cursor(editor);
     Ok(())
 }

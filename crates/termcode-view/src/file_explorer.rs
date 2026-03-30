@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
+use termcode_core::config_types::FileTreeStyle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileNodeKind {
@@ -27,6 +28,7 @@ pub struct FileExplorer {
     pub visible: bool,
     pub width: u16,
     pub viewport_height: usize,
+    pub scroll_left: u16,
 }
 
 impl FileExplorer {
@@ -39,6 +41,7 @@ impl FileExplorer {
             visible: false,
             width: 30,
             viewport_height: 0,
+            scroll_left: 0,
         };
         explorer.load_children(&root, 0, 0)?;
         Ok(explorer)
@@ -100,13 +103,14 @@ impl FileExplorer {
         self.tree.get(self.selected).map(|n| n.path.as_path())
     }
 
-    pub fn move_selection(&mut self, delta: i32) {
+    pub fn move_selection(&mut self, delta: i32, file_tree_style: &FileTreeStyle) {
         if self.tree.is_empty() {
             return;
         }
         let new = self.selected as i32 + delta;
         self.selected = new.clamp(0, self.tree.len() as i32 - 1) as usize;
         self.ensure_visible(self.viewport_height);
+        self.compute_scroll_left(file_tree_style);
     }
 
     /// Adjust scroll_offset so that `self.selected` is within the visible viewport.
@@ -118,6 +122,39 @@ impl FileExplorer {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + viewport_height {
             self.scroll_offset = self.selected - viewport_height + 1;
+        }
+    }
+
+    /// Adjust horizontal scroll so the selected node's filename is visible.
+    /// Works like vertical `ensure_visible` — only shifts the minimum amount needed.
+    pub fn compute_scroll_left(&mut self, style: &FileTreeStyle) {
+        if self.tree.is_empty() || self.selected >= self.tree.len() {
+            self.scroll_left = 0;
+            return;
+        }
+        let depth = self.tree[self.selected].depth;
+        let indent: u16 = if style.tree_style {
+            (depth * 4) as u16
+        } else {
+            (depth * 2) as u16
+        };
+        let icon_width: u16 = if style.show_file_type_emoji { 3 } else { 0 };
+        // name_start = where the filename text actually begins (after indent + icon)
+        let name_start = indent + icon_width;
+
+        let width = self.width;
+
+        // If filename starts beyond the right edge → shift right (minimum to show it)
+        if name_start >= self.scroll_left + width {
+            self.scroll_left = name_start.saturating_sub(width / 3);
+        }
+        // If indent is left of viewport → shift left to show tree context
+        else if indent < self.scroll_left {
+            self.scroll_left = indent.saturating_sub(2);
+        }
+        // Pull back if there's unnecessary blank space on the left
+        if self.scroll_left > 0 && indent < self.scroll_left + 2 {
+            self.scroll_left = indent.saturating_sub(2);
         }
     }
 
