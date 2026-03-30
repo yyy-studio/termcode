@@ -348,10 +348,12 @@ mod tests {
 
         let result = manager.register_hook("on_invalid", "test-plugin".into(), key);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unknown hook name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unknown hook name")
+        );
     }
 
     #[test]
