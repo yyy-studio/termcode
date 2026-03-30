@@ -132,24 +132,26 @@ impl FileExplorer {
             self.scroll_left = 0;
             return;
         }
-        let depth = self.tree[self.selected].depth;
+        let node = &self.tree[self.selected];
+        let depth = node.depth;
         let indent: u16 = if style.tree_style {
             (depth * 4) as u16
         } else {
             (depth * 2) as u16
         };
         let icon_width: u16 = if style.show_file_type_emoji { 3 } else { 0 };
-        // name_start = where the filename text actually begins (after indent + icon)
         let name_start = indent + icon_width;
+        let name_len = node.name.len() as u16;
+        let name_end = name_start + name_len;
 
         let width = self.width;
 
-        // If filename starts beyond the right edge → shift right (minimum to show it)
-        if name_start >= self.scroll_left + width {
-            self.scroll_left = name_start.saturating_sub(width / 3);
+        // If filename end extends beyond the right edge → shift right to show full name
+        if name_end > self.scroll_left + width {
+            self.scroll_left = name_end.saturating_sub(width);
         }
         // If indent is left of viewport → shift left to show tree context
-        else if indent < self.scroll_left {
+        if indent < self.scroll_left {
             self.scroll_left = indent.saturating_sub(2);
         }
         // Pull back if there's unnecessary blank space on the left
