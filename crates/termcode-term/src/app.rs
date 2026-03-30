@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
-    sync_cursor_from_selection,
+    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
+    CommandRegistry,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -506,6 +506,12 @@ impl App {
         }
 
         self.editor.hover.visible = false;
+
+        if self.editor.help_visible {
+            // Any key closes help popup
+            self.editor.help_visible = false;
+            return;
+        }
 
         if self.editor.mode != EditorMode::Insert && self.editor.completion.visible {
             self.editor.completion.visible = false;

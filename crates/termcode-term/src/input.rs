@@ -38,6 +38,7 @@ impl InputMapper {
             (key(ctrl | shift, KeyCode::Char('P')), "palette.open"),
             (key(ctrl, KeyCode::Char('v')), "clipboard.paste"),
             (key(ctrl, KeyCode::Char('x')), "clipboard.cut"),
+            (key(none, KeyCode::F(1)), "help.toggle"),
         ];
 
         let normal = vec![
@@ -65,6 +66,7 @@ impl InputMapper {
             (key(shift, KeyCode::Char('K')), "lsp.hover"),
             (key(none, KeyCode::Char(':')), "palette.open"),
             (key(none, KeyCode::Char('`')), "palette.open"),
+            (key(shift, KeyCode::Char('?')), "help.toggle"),
         ];
 
         let insert = vec![

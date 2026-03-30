@@ -36,6 +36,22 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
 }
 
 fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) -> MouseAction {
+    // Help popup: any click dismisses it
+    if editor.help_visible {
+        editor.help_visible = false;
+        return MouseAction::None;
+    }
+
+    // Help button in top bar (right-aligned)
+    if rect_contains(&layout.top_bar, x, y) {
+        let btn_start = (layout.top_bar.x + layout.top_bar.width)
+            .saturating_sub(crate::ui::top_bar::HELP_BUTTON_WIDTH);
+        if x >= btn_start {
+            editor.help_visible = !editor.help_visible;
+            return MouseAction::None;
+        }
+    }
+
     if let Some(sidebar_title) = layout.sidebar_title {
         if rect_contains(&sidebar_title, x, y) {
             editor.switch_mode(EditorMode::FileExplorer);

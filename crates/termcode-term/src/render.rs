@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use ratatui::Frame;
 use ratatui::style::Style as RatStyle;
 use ratatui::widgets::{Block, Borders};
+use ratatui::Frame;
 
 use ratatui_image::protocol::StatefulProtocol;
 use termcode_view::editor::{Editor, EditorMode};
@@ -17,6 +17,7 @@ use crate::ui::completion::CompletionWidget;
 use crate::ui::editor_view::EditorViewWidget;
 use crate::ui::file_explorer::FileExplorerWidget;
 use crate::ui::fuzzy_finder::FuzzyFinderWidget;
+use crate::ui::help_popup::HelpPopupWidget;
 use crate::ui::hover::HoverWidget;
 use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
@@ -179,6 +180,12 @@ pub fn render(
         editor.active_image(),
     );
     frame.render_widget(status_widget, app_layout.status_bar);
+
+    // Help popup overlay (rendered last, on top of everything)
+    if editor.help_visible {
+        let help_widget = HelpPopupWidget::new(&editor.theme);
+        frame.render_widget(help_widget, area);
+    }
 }
 
 fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u16, u16)> {

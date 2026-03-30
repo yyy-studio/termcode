@@ -39,9 +39,10 @@ pub fn render_overlay_frame(area: Rect, buf: &mut Buffer, theme: &Theme) {
     let border_color = theme.ui.border.to_ratatui();
     let border_style = Style::default().fg(border_color).bg(bg);
 
-    // Fill background
+    // Fill background (reset to clear inherited modifiers like REVERSED cursor)
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
+            buf[(x, y)].reset();
             buf[(x, y)].set_char(' ').set_bg(bg);
         }
     }

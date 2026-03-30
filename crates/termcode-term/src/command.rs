@@ -279,9 +279,20 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
         name: "Toggle Line Numbers",
         handler: cmd_line_numbers_toggle,
     });
+
+    registry.register(CommandEntry {
+        id: "help.toggle",
+        name: "Toggle Help",
+        handler: cmd_help_toggle,
+    });
 }
 
 pub fn cmd_noop(_editor: &mut Editor) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn cmd_help_toggle(editor: &mut Editor) -> anyhow::Result<()> {
+    editor.help_visible = !editor.help_visible;
     Ok(())
 }
 

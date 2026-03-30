@@ -3,6 +3,7 @@ pub mod completion;
 pub mod editor_view;
 pub mod file_explorer;
 pub mod fuzzy_finder;
+pub mod help_popup;
 pub mod hover;
 pub mod image_view;
 pub mod overlay;

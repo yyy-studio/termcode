@@ -6,8 +6,8 @@ use termcode_theme::theme::Theme;
 use termcode_view::fuzzy::FuzzyFinderState;
 
 use super::overlay::{
-    ListItem, OverlayConfig, OverlayPosition, compute_overlay_rect, render_input_line,
-    render_overlay_frame, render_result_list,
+    compute_overlay_rect, render_input_line, render_overlay_frame, render_result_list, ListItem,
+    OverlayConfig, OverlayPosition,
 };
 
 pub struct FuzzyFinderWidget<'a> {

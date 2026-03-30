@@ -2,8 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{StatefulWidget, Widget};
-use ratatui_image::StatefulImage;
 use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::StatefulImage;
 
 use termcode_theme::theme::Theme;
 
