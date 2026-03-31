@@ -87,6 +87,26 @@ Six modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `Command
 3. Add module to `ui/mod.rs`
 4. Render in `render.rs` (overlays go after the editor view)
 
+### Plugin System
+
+Plugins are sandboxed Lua scripts discovered from `~/.config/termcode/plugins/` and `runtime/plugins/`. Each plugin has a `plugin.toml` manifest and an `init.lua` entry point.
+
+**Sandbox restrictions:** Restricted Lua stdlib (base, string, table, math, utf8, safe os subset). Instruction and memory limits prevent resource exhaustion. Per-plugin `require()` is scoped to the plugin directory (no path traversal).
+
+**Hook events:** `on_open`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`. Plugins register hooks via `termcode.on("event_name", handler)`.
+
+**Plugin commands:** Plugins register commands via `termcode.register_command("name", handler)` which become available in the command palette. Commands execute through thread-local `EDITOR_PTR` for safe mutable access during execution.
+
+**Deferred actions:** Plugins cannot directly mutate app state. Instead, actions like `OpenFile` and `ExecuteCommand` are queued and processed after hook/command execution completes.
+
+### Image Viewer
+
+Images open in tabs alongside text documents via `TabContent::Image(ImageId)`. Frontend-agnostic metadata (`ImageEntry`: path, format, file_size, dimensions) lives in `termcode-view`. Decoded pixel data is cached in `App.image_cache: HashMap<ImageId, Mutex<StatefulProtocol>>` in `termcode-term`, rendered via `ratatui-image`.
+
+### Tab System
+
+`TabManager` manages `Vec<Tab>` where each `Tab` holds a `TabContent` enum (`Document(DocumentId)` or `Image(ImageId)`). Navigation: `Alt+Left`/`Alt+Right`. When an image tab is active, `active_view` is `None` (no cursor/viewport).
+
 ### Adding a New Theme
 
 1. Create `runtime/themes/my-theme.toml` following the structure in `one-dark.toml`
@@ -106,6 +126,26 @@ File tree display is controlled by two flat bools under `[ui]` in config (uses `
 - `show_file_type_emoji = true|false` — show file type emoji icons
 
 File type icons are configured per-theme via `[icons]` section (directory_open, directory_closed, file_default) and `[icons.extensions]` table (extension → emoji). User overrides merge on top of defaults.
+
+### File Explorer
+
+Tree-based with lazy expansion. Uses `ignore::WalkBuilder` for `.gitignore`-aware traversal. `FileNode` tracks kind (File/Directory/Symlink), depth, and expanded state. `toggle_expand()` inserts/removes children inline; `refresh()` preserves existing expansion state.
+
+### CI & Release
+
+- **CI** (`.github/workflows/ci.yml`): fmt check → clippy → test (ubuntu/macos/windows matrix) → build
+- **Release** (`.github/workflows/release.yml`): Tag-triggered multi-platform build (aarch64/x86_64 darwin/linux + windows). Cross-compilation via `cross`. Archives include `runtime/` directory. Creates GitHub Release with artifacts.
+
+### Runtime Directory
+
+```
+runtime/
+  themes/      # Built-in themes (one-dark, gruvbox-dark, catppuccin-mocha, lazygit)
+  plugins/     # Example plugins (each has plugin.toml + init.lua)
+  queries/     # Tree-sitter highlight queries per language
+```
+
+User overrides: `~/.config/termcode/themes/` and `~/.config/termcode/plugins/` are also scanned.
 
 ## Important Technical Details
 
