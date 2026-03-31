@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
-    sync_cursor_from_selection,
+    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
+    CommandRegistry,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -220,18 +220,24 @@ impl App {
             .to_ascii_lowercase();
         let metadata = std::fs::metadata(path)?;
         let file_size = metadata.len();
-        let image_id = self.editor.open_image(path, ext, file_size);
-
-        if let Some(picker) = &mut self.image_picker {
+        let (dimensions, decoded) = if let Some(picker) = &mut self.image_picker {
             match image::open(path) {
                 Ok(dyn_image) => {
+                    let dims = Some((dyn_image.width(), dyn_image.height()));
                     let protocol = picker.new_resize_protocol(dyn_image);
-                    self.image_cache.insert(image_id, Mutex::new(protocol));
+                    (dims, Some(protocol))
                 }
                 Err(e) => {
                     self.editor.status_message = Some(format!("Failed to decode image: {e}"));
+                    (None, None)
                 }
             }
+        } else {
+            (None, None)
+        };
+        let image_id = self.editor.open_image(path, ext, file_size, dimensions);
+        if let Some(protocol) = decoded {
+            self.image_cache.insert(image_id, Mutex::new(protocol));
         }
         Ok(())
     }

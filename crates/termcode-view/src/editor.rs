@@ -227,13 +227,20 @@ impl Editor {
 
     /// Open an image file, creating an ImageEntry and a tab for it.
     /// Returns the ImageId. No View is created -- active_view is set to None.
-    pub fn open_image(&mut self, path: &Path, format: String, file_size: u64) -> ImageId {
+    pub fn open_image(
+        &mut self,
+        path: &Path,
+        format: String,
+        file_size: u64,
+        dimensions: Option<(u32, u32)>,
+    ) -> ImageId {
         let image_id = self.next_image_id();
         let entry = ImageEntry {
             id: image_id,
             path: path.to_path_buf(),
             format,
             file_size,
+            dimensions,
         };
         self.images.insert(image_id, entry);
         self.active_view = None;

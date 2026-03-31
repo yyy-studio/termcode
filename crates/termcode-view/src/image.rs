@@ -14,6 +14,9 @@ pub struct ImageEntry {
     pub path: PathBuf,
     pub format: String,
     pub file_size: u64,
+    /// Original image dimensions in pixels (width, height).
+    /// `None` if the image failed to decode.
+    pub dimensions: Option<(u32, u32)>,
 }
 
 /// Distinguishes what a tab points to: a text document or an image.

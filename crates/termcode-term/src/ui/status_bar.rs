@@ -134,7 +134,11 @@ impl Widget for StatusBarWidget<'_> {
         // Right side: cursor position, encoding, language (or image info)
         let right_text = if let Some(img) = self.image {
             let size = format_file_size(img.file_size);
-            format!("{}  {} ", img.format.to_uppercase(), size)
+            let dims = img
+                .dimensions
+                .map(|(w, h)| format!("{w} x {h} px  "))
+                .unwrap_or_default();
+            format!("{}{}  {} ", dims, img.format.to_uppercase(), size)
         } else if let (Some(doc), Some(view)) = (self.doc, self.view) {
             let line = view.cursor.line + 1;
             let col = view.cursor.column + 1;
