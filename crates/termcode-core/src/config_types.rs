@@ -48,6 +48,8 @@ pub struct FileTreeStyle {
     pub tree_style: bool,
     /// Show file type emoji icons (📁 📂 📝)
     pub show_file_type_emoji: bool,
+    /// Respect .gitignore when listing files
+    pub respect_gitignore: bool,
 }
 
 impl Default for FileTreeStyle {
@@ -55,6 +57,7 @@ impl Default for FileTreeStyle {
         Self {
             tree_style: true,
             show_file_type_emoji: true,
+            respect_gitignore: true,
         }
     }
 }

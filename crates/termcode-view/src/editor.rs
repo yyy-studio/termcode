@@ -99,6 +99,7 @@ impl Editor {
             width: 30,
             viewport_height: 0,
             scroll_left: 0,
+            respect_gitignore: true,
         });
 
         Self {

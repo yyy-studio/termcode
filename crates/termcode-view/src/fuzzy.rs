@@ -33,15 +33,16 @@ impl FuzzyFinderState {
         }
     }
 
-    /// Walk project files using ignore::WalkBuilder (respects .gitignore).
-    pub fn load_files(&mut self, root: &Path) {
+    /// Walk project files using ignore::WalkBuilder.
+    /// When `respect_gitignore` is true, files matched by .gitignore are excluded.
+    pub fn load_files(&mut self, root: &Path, respect_gitignore: bool) {
         self.all_files.clear();
 
         let walker = WalkBuilder::new(root)
             .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
+            .git_ignore(respect_gitignore)
+            .git_global(respect_gitignore)
+            .git_exclude(respect_gitignore)
             .build();
 
         let root_prefix = root.to_path_buf();
@@ -268,7 +269,7 @@ mod tests {
         std::fs::write(dir.join("lib.rs"), "pub mod test;").unwrap();
 
         let mut state = FuzzyFinderState::new();
-        state.load_files(&dir);
+        state.load_files(&dir, false);
         assert!(state.all_files.len() >= 2);
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
-    sync_cursor_from_selection,
+    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
+    CommandRegistry,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -96,6 +96,11 @@ impl App {
         }
         let mut editor = Editor::new(theme, config, lang_registry, root);
         editor.file_tree_style = app_config.ui.file_tree_style;
+        editor.file_explorer.respect_gitignore = app_config.ui.file_tree_style.respect_gitignore;
+        if !app_config.ui.file_tree_style.respect_gitignore {
+            // Reload file tree without gitignore filtering
+            let _ = editor.file_explorer.refresh();
+        }
         editor.file_explorer.width = app_config.ui.sidebar_width;
         editor.file_explorer.visible = app_config.ui.sidebar_visible;
         if let Some(msg) = startup_theme_status {

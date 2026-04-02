@@ -911,7 +911,8 @@ fn cmd_search_close(editor: &mut Editor) -> anyhow::Result<()> {
 fn cmd_fuzzy_open(editor: &mut Editor) -> anyhow::Result<()> {
     if editor.fuzzy_finder.all_files.is_empty() {
         let root = editor.file_explorer.root.clone();
-        editor.fuzzy_finder.load_files(&root);
+        let respect_gitignore = editor.file_tree_style.respect_gitignore;
+        editor.fuzzy_finder.load_files(&root, respect_gitignore);
     }
     editor.fuzzy_finder.query.clear();
     editor.fuzzy_finder.cursor_pos = 0;

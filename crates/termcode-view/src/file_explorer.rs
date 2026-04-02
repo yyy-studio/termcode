@@ -29,10 +29,15 @@ pub struct FileExplorer {
     pub width: u16,
     pub viewport_height: usize,
     pub scroll_left: u16,
+    pub respect_gitignore: bool,
 }
 
 impl FileExplorer {
     pub fn open(root: PathBuf) -> anyhow::Result<Self> {
+        Self::open_with_gitignore(root, true)
+    }
+
+    pub fn open_with_gitignore(root: PathBuf, respect_gitignore: bool) -> anyhow::Result<Self> {
         let mut explorer = Self {
             root: root.clone(),
             tree: Vec::new(),
@@ -42,6 +47,7 @@ impl FileExplorer {
             width: 30,
             viewport_height: 0,
             scroll_left: 0,
+            respect_gitignore,
         };
         explorer.load_children(&root, 0, 0)?;
         Ok(explorer)
@@ -169,6 +175,9 @@ impl FileExplorer {
 
         let walker = WalkBuilder::new(dir)
             .max_depth(Some(1))
+            .git_ignore(self.respect_gitignore)
+            .git_global(self.respect_gitignore)
+            .git_exclude(self.respect_gitignore)
             .sort_by_file_name(|a, b| a.cmp(b))
             .build();
 
