@@ -32,16 +32,17 @@
 
 ## Installation
 
+### Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yyy-studio/termcode/main/install.sh | sh
+```
+
+Automatically detects your platform, downloads the latest release, and installs to `~/.local/bin/`.
+
 ### Pre-built binaries
 
 Download from [GitHub Releases](https://github.com/yyy-studio/termcode/releases):
-
-```bash
-# macOS (Apple Silicon)
-curl -LO https://github.com/yyy-studio/termcode/releases/latest/download/termcode-aarch64-apple-darwin.tar.gz
-tar xzf termcode-aarch64-apple-darwin.tar.gz
-sudo cp termcode-aarch64-apple-darwin/termcode /usr/local/bin/
-```
 
 | Platform              | Download                                    |
 | --------------------- | ------------------------------------------- |
