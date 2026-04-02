@@ -132,7 +132,11 @@ impl Editor {
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<(DocumentId, ViewId)> {
         let doc_id = self.next_document_id();
         let lang_id = self.language_registry.detect_language(path);
-        let doc = Document::open(doc_id, path, lang_id)?;
+        let lang_config = lang_id
+            .as_deref()
+            .and_then(|id| self.language_registry.get(id))
+            .map(|arc| arc.as_ref());
+        let doc = Document::open(doc_id, path, lang_config)?;
         self.documents.insert(doc_id, doc);
 
         let view_id = self.next_view_id();

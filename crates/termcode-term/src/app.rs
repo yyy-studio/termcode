@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
-    CommandRegistry,
+    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
+    sync_cursor_from_selection,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -90,7 +90,10 @@ impl App {
             }
         };
         let config = app_config.editor.clone();
-        let lang_registry = LanguageRegistry::with_builtins();
+        let mut lang_registry = LanguageRegistry::with_builtins();
+        for dir in termcode_config::default::runtime_dirs() {
+            lang_registry.load_queries(&dir);
+        }
         let mut editor = Editor::new(theme, config, lang_registry, root);
         editor.file_tree_style = app_config.ui.file_tree_style;
         editor.file_explorer.width = app_config.ui.sidebar_width;

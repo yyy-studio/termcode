@@ -59,6 +59,11 @@ impl ChangeSet {
         self.ops.is_empty()
     }
 
+    /// Read-only access to the operations in this changeset.
+    pub fn ops(&self) -> &[Operation] {
+        &self.ops
+    }
+
     pub fn input_len(&self) -> usize {
         self.input_len
     }

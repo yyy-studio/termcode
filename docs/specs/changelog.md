@@ -1,5 +1,23 @@
 # Specification Change History
 
+## [2026-04-01] Tree-sitter Syntax Highlighting Integration specification
+
+### Added
+
+- [FR-SYNTAX-001] Tree-sitter parser integration (replace keyword-based SyntaxHighlighter)
+- [FR-SYNTAX-002] Full-document parsing on file open
+- [FR-SYNTAX-003] Viewport-scoped highlighting for render performance
+- [FR-SYNTAX-004] Incremental re-parsing after edits (insert/delete/undo/redo)
+- [FR-SYNTAX-005] LanguageConfig grammar extension and query file loading
+- [FR-SYNTAX-006] Highlight query files for 11 languages in runtime/queries/
+- [FR-SYNTAX-007] Document integration (updated Document::open and mutation flow)
+- [FR-SYNTAX-008] Rendering integration (EditorViewWidget updated to highlight_lines)
+- [FR-SYNTAX-009] Graceful degradation when grammar unavailable
+- [FR-SYNTAX-010] Supported languages table (Rust, Python, JS, TS, JSON, Markdown, Bash, TOML, C, C++, Go)
+- [FR-SYNTAX-011] Unit tests for tree-sitter highlighter
+
+**Specification file**: `docs/specs/tree-sitter-highlighting.md`
+
 ## [2026-03-30] Unsaved Changes Confirmation Dialog specification
 
 ### Added

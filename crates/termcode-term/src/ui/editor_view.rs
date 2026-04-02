@@ -83,6 +83,14 @@ impl Widget for EditorViewWidget<'_> {
             }
         }
 
+        let end_line = (top_line + visible_lines).min(line_count);
+        let all_spans = self
+            .doc
+            .syntax
+            .as_ref()
+            .map(|s| s.highlight_lines(self.doc.buffer.text(), top_line..end_line))
+            .unwrap_or_default();
+
         for i in 0..visible_lines {
             let line_idx = top_line + i;
             let y = area.y + i as u16;
@@ -185,18 +193,17 @@ impl Widget for EditorViewWidget<'_> {
             let line_text: String = rope_line.chars().collect();
             let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
 
-            let spans = self
-                .doc
-                .syntax
-                .as_ref()
-                .map(|s| s.highlight_line(line_text))
-                .unwrap_or_default();
+            let spans = if i < all_spans.len() {
+                &all_spans[i]
+            } else {
+                &[] as &[termcode_syntax::highlighter::HighlightSpan]
+            };
 
             let line_bytes = line_text.as_bytes();
             let mut char_styles: Vec<Style> =
                 vec![Style::default().fg(self.theme.ui.foreground.to_ratatui()); line_bytes.len()];
 
-            for span in &spans {
+            for span in spans {
                 let resolved = self.theme.resolve(&span.scope);
                 let style = resolved.to_ratatui();
                 for cs in &mut char_styles[span.byte_start..span.byte_end.min(line_bytes.len())] {

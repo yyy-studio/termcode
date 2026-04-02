@@ -5,8 +5,8 @@ use termcode_core::diagnostic::Diagnostic;
 use termcode_core::history::History;
 use termcode_core::selection::Selection;
 use termcode_core::transaction::Transaction;
-use termcode_syntax::highlighter::SyntaxHighlighter;
-use termcode_syntax::language::LanguageId;
+use termcode_syntax::highlighter::{SyntaxHighlighter, changeset_to_input_edits};
+use termcode_syntax::language::{LanguageConfig, LanguageId};
 
 /// Unique identifier for a document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -48,11 +48,15 @@ impl Document {
     pub fn open(
         id: DocumentId,
         path: &Path,
-        language_id: Option<LanguageId>,
+        lang_config: Option<&LanguageConfig>,
     ) -> Result<Self, BufferError> {
         let buffer = Buffer::from_file(path)?;
 
-        let syntax = language_id.as_ref().map(SyntaxHighlighter::new);
+        let language_id = lang_config.map(|c| c.id.clone());
+        let mut syntax = lang_config.and_then(SyntaxHighlighter::new);
+        if let Some(ref mut hl) = syntax {
+            hl.parse(buffer.text());
+        }
 
         Ok(Self {
             id,
@@ -81,7 +85,8 @@ impl Document {
     /// The inverse is computed before apply (it needs the original rope state).
     /// History is only committed after a successful buffer apply to prevent divergence.
     pub fn apply_transaction(&mut self, transaction: &Transaction) -> anyhow::Result<()> {
-        let inverse = transaction.invert(self.buffer.text());
+        let old_rope = self.buffer.text().clone();
+        let inverse = transaction.invert(&old_rope);
         self.buffer.apply(transaction)?;
         self.version += 1;
         self.history
@@ -91,12 +96,17 @@ impl Document {
         } else {
             self.selection = self.selection.map(&transaction.changes);
         }
+        if let Some(ref mut hl) = self.syntax {
+            let edits = changeset_to_input_edits(&old_rope, &transaction.changes);
+            hl.update(self.buffer.text(), &edits);
+        }
         Ok(())
     }
 
     /// Undo the last edit. Returns true if an undo was performed.
     pub fn undo(&mut self) -> anyhow::Result<bool> {
         if let Some(inverse) = self.history.undo() {
+            let old_rope = self.buffer.text().clone();
             if let Some(ref sel) = inverse.selection {
                 self.selection = sel.clone();
             } else {
@@ -104,6 +114,10 @@ impl Document {
             }
             self.buffer.apply(&inverse)?;
             self.version += 1;
+            if let Some(ref mut hl) = self.syntax {
+                let edits = changeset_to_input_edits(&old_rope, &inverse.changes);
+                hl.update(self.buffer.text(), &edits);
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -113,6 +127,7 @@ impl Document {
     /// Redo the last undone edit. Returns true if a redo was performed.
     pub fn redo(&mut self) -> anyhow::Result<bool> {
         if let Some(txn) = self.history.redo() {
+            let old_rope = self.buffer.text().clone();
             if let Some(ref sel) = txn.selection {
                 self.selection = sel.clone();
             } else {
@@ -120,6 +135,10 @@ impl Document {
             }
             self.buffer.apply(&txn)?;
             self.version += 1;
+            if let Some(ref mut hl) = self.syntax {
+                let edits = changeset_to_input_edits(&old_rope, &txn.changes);
+                hl.update(self.buffer.text(), &edits);
+            }
             Ok(true)
         } else {
             Ok(false)

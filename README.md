@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &bull;
+  <a href="#getting-started">Getting Started</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="#keybindings">Keybindings</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
@@ -90,13 +91,34 @@ cargo install --path .
 | **Diagnostics**      | Inline underlines, gutter icons, error/warning navigation           |
 | **True color**       | 24-bit RGB color rendering                                          |
 
-## Usage
+## Getting Started
+
+### Launch
 
 ```bash
 termcode path/to/file.rs    # Open a file
 termcode .                   # Open directory in file explorer
 termcode                     # Empty editor
 ```
+
+### Options
+
+| Flag              | Description   |
+| ----------------- | ------------- |
+| `-h`, `--help`    | Print help    |
+| `-V`, `--version` | Print version |
+
+### Quick Workflow
+
+1. **Open a project** -- `termcode .` to start with the file explorer
+2. **Navigate files** -- `Ctrl+B` to toggle sidebar, `Ctrl+P` to fuzzy find
+3. **Edit** -- press `i` to enter Edit mode, `Esc` to return to Normal mode
+4. **Save** -- `Ctrl+S`
+5. **Search** -- `Ctrl+F` to search, `Ctrl+H` to search & replace
+6. **Tabs** -- open multiple files, switch with `Alt+Left` / `Alt+Right`, close with `Ctrl+W`
+7. **Commands** -- `Ctrl+Shift+P` to open command palette (theme switch, all commands)
+8. **LSP** -- auto-activates if a language server is configured (see [Configuration](#configuration))
+9. **Quit** -- `Ctrl+Q`
 
 ## Keybindings
 
