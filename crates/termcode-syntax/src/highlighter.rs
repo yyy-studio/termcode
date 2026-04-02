@@ -170,11 +170,13 @@ impl SyntaxHighlighter {
                         let start_line_idx = source.byte_to_line(start);
                         let end_line_idx = source.byte_to_line(end.saturating_sub(1));
 
-                        for line_idx in start_line_idx..=end_line_idx {
-                            if line_idx >= line_count {
-                                break;
-                            }
-
+                        let clamped_end = end_line_idx.min(line_count.saturating_sub(1));
+                        for (line_idx, line_spans) in result
+                            .iter_mut()
+                            .enumerate()
+                            .take(clamped_end + 1)
+                            .skip(start_line_idx)
+                        {
                             let line_byte_start = source.line_to_byte(line_idx);
                             let line_byte_end = if line_idx + 1 < line_count {
                                 source.line_to_byte(line_idx + 1)
@@ -186,7 +188,7 @@ impl SyntaxHighlighter {
                             let span_end = end.min(line_byte_end) - line_byte_start;
 
                             if span_start < span_end {
-                                result[line_idx].push(HighlightSpan {
+                                line_spans.push(HighlightSpan {
                                     byte_start: span_start,
                                     byte_end: span_end,
                                     scope: scope.to_string(),
