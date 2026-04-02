@@ -56,7 +56,7 @@ detect_platform() {
 latest_tag() {
     curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name"' \
-        | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
 # --- interactive config setup -----------------------------------------------
