@@ -7,14 +7,6 @@ use tree_sitter::Language;
 /// Language identifier. Lowercase ASCII (e.g., "rust", "python").
 pub type LanguageId = Arc<str>;
 
-/// Bridge for tree-sitter-toml which uses the old tree-sitter 0.20 API.
-/// The underlying C ABI is identical across tree-sitter versions.
-pub(crate) fn toml_language() -> Language {
-    // tree_sitter_toml uses tree-sitter 0.20 whose Language is `*const TSLanguage`.
-    // tree-sitter 0.24's Language is also `*const TSLanguage` with identical layout.
-    unsafe { std::mem::transmute(tree_sitter_toml::language()) }
-}
-
 /// Configuration for a supported language.
 #[derive(Clone)]
 pub struct LanguageConfig {
@@ -100,7 +92,7 @@ impl LanguageRegistry {
             name: "TOML".to_string(),
             file_extensions: vec!["toml".to_string()],
             highlight_query: String::new(),
-            grammar: Some(toml_language()),
+            grammar: Some(tree_sitter_toml_ng::LANGUAGE.into()),
         });
         reg.register(LanguageConfig {
             id: Arc::from("json"),

@@ -609,7 +609,7 @@ mod tests {
     }
     test_grammar!(
         grammar_toml,
-        crate::language::toml_language(),
+        tree_sitter_toml_ng::LANGUAGE.into(),
         include_str!("../../../runtime/queries/toml/highlights.scm")
     );
 }
