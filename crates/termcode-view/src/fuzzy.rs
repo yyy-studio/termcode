@@ -39,10 +39,12 @@ impl FuzzyFinderState {
         self.all_files.clear();
 
         let walker = WalkBuilder::new(root)
-            .hidden(true)
+            .hidden(respect_gitignore)
             .git_ignore(respect_gitignore)
             .git_global(respect_gitignore)
             .git_exclude(respect_gitignore)
+            .ignore(respect_gitignore)
+            .parents(respect_gitignore)
             .build();
 
         let root_prefix = root.to_path_buf();

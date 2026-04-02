@@ -122,8 +122,6 @@ setup_config() {
     printf '\n  \033[1m── Editor ──\033[0m\n'
     ask "Tab size" "4" cfg_tab_size
     ask_yn "Use spaces for indentation" "true" cfg_insert_spaces
-    ask_yn "Auto save" "false" cfg_auto_save
-    ask_yn "Word wrap" "false" cfg_word_wrap
     ask_choice "Line numbers" "absolute relative relative_absolute none" "absolute" cfg_line_numbers
     ask_yn "Enable mouse" "true" cfg_mouse
 
@@ -145,8 +143,6 @@ theme = "${cfg_theme}"
 [editor]
 tab_size = ${cfg_tab_size}
 insert_spaces = ${cfg_insert_spaces}
-auto_save = ${cfg_auto_save}
-word_wrap = ${cfg_word_wrap}
 line_numbers = "${cfg_line_numbers}"
 scroll_off = 5
 mouse_enabled = ${cfg_mouse}

@@ -175,9 +175,12 @@ impl FileExplorer {
 
         let walker = WalkBuilder::new(dir)
             .max_depth(Some(1))
+            .hidden(self.respect_gitignore)
             .git_ignore(self.respect_gitignore)
             .git_global(self.respect_gitignore)
             .git_exclude(self.respect_gitignore)
+            .ignore(self.respect_gitignore)
+            .parents(self.respect_gitignore)
             .sort_by_file_name(|a, b| a.cmp(b))
             .build();
 
