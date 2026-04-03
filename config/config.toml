@@ -3,8 +3,6 @@ theme = "one-dark"
 [editor]
 tab_size = 4
 insert_spaces = true
-auto_save = false
-word_wrap = false
 line_numbers = "absolute"
 scroll_off = 5
 mouse_enabled = true
@@ -17,6 +15,7 @@ show_tab_bar = true
 show_top_bar = true
 tree_style = true 
 show_file_type_emoji = true 
+respect_gitignore = false
 
 # LSP server configurations
 # [[lsp]]

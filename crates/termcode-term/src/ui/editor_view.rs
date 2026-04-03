@@ -243,7 +243,7 @@ impl Widget for EditorViewWidget<'_> {
                     }
                 } else {
                     let ch_width = ch.width().unwrap_or(0) as u16;
-                    if col >= left_col as u16 {
+                    if ch_width > 0 && col >= left_col as u16 {
                         let x = code_start + col - left_col as u16;
                         if x + ch_width <= code_start + code_width {
                             // Full character fits in the code area

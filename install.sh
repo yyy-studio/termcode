@@ -183,7 +183,7 @@ main() {
     url="https://github.com/${REPO}/releases/download/${tag}/${archive_name}"
 
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' EXIT
+    trap 'rm -rf "${tmpdir:-}"' EXIT
 
     info "Downloading ${archive_name}..."
     curl -fsSL "$url" -o "${tmpdir}/${archive_name}" \
@@ -196,6 +196,11 @@ main() {
     mkdir -p "$INSTALL_DIR"
     cp "${tmpdir}/termcode-${target}/termcode" "${INSTALL_DIR}/termcode"
     chmod +x "${INSTALL_DIR}/termcode"
+    # macOS: remove quarantine attributes and ad-hoc sign so Gatekeeper won't kill the binary
+    if [ "$(uname -s)" = "Darwin" ]; then
+        xattr -c "${INSTALL_DIR}/termcode" 2>/dev/null || true
+        codesign --force --sign - "${INSTALL_DIR}/termcode" 2>/dev/null || true
+    fi
     info "Installed binary to ${INSTALL_DIR}/termcode"
 
     # Install runtime (overwrite built-in, preserve user config)
