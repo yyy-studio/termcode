@@ -10,8 +10,9 @@ pub fn config_dir() -> PathBuf {
 ///
 /// Returns directories in priority order (first match wins):
 /// 1. `runtime/` next to the binary (portable / development)
-/// 2. `~/.config/termcode/` (user config directory)
-/// 3. `runtime/` in CWD (fallback)
+/// 2. `~/.config/termcode/runtime/` (installed via install.sh)
+/// 3. `~/.config/termcode/` (user config directory, for user overrides)
+/// 4. `runtime/` in CWD (fallback)
 pub fn runtime_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
@@ -23,13 +24,19 @@ pub fn runtime_dirs() -> Vec<PathBuf> {
         }
     }
 
-    // 2. User config directory (~/.config/termcode/)
+    // 2. Installed runtime under user config (~/.config/termcode/runtime/)
+    let cfg_runtime = config_dir().join("runtime");
+    if cfg_runtime.exists() {
+        dirs.push(cfg_runtime);
+    }
+
+    // 3. User config directory itself (~/.config/termcode/) for user overrides
     let cfg = config_dir();
     if cfg.exists() {
         dirs.push(cfg);
     }
 
-    // 3. CWD/runtime (fallback for development)
+    // 4. CWD/runtime (fallback for development)
     let cwd_runtime = PathBuf::from("runtime");
     if cwd_runtime.exists() && !dirs.contains(&cwd_runtime) {
         dirs.push(cwd_runtime);
