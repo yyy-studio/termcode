@@ -6,10 +6,10 @@ use std::sync::Mutex;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use termcode_config::config::AppConfig;
@@ -23,8 +23,8 @@ use termcode_view::file_explorer::FileNodeKind;
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
 use crate::command::{
-    CommandRegistry, insert_char, register_builtin_commands, rerun_search,
-    sync_cursor_from_selection,
+    insert_char, register_builtin_commands, rerun_search, sync_cursor_from_selection,
+    CommandRegistry,
 };
 use crate::event::{AppEvent, EventHandler};
 use ratatui_image::picker::Picker;
@@ -1171,11 +1171,11 @@ impl App {
             self.should_quit = true;
         } else {
             use termcode_view::confirm::{ConfirmAction, ConfirmDialog};
-            let message = format!("저장되지 않은 파일이 {modified_count}개 있습니다.");
+            let message = format!("You have {modified_count} unsaved file(s).");
             let buttons = vec![
-                "전부 저장 후 종료".to_string(),
-                "저장 안 하고 종료".to_string(),
-                "취소".to_string(),
+                "Save All & Quit".to_string(),
+                "Quit Without Saving".to_string(),
+                "Cancel".to_string(),
             ];
             self.editor.confirm_dialog =
                 Some(ConfirmDialog::new(ConfirmAction::QuitAll, message, buttons));
@@ -1195,11 +1195,11 @@ impl App {
                         let name = doc
                             .map(|d| d.display_name().to_string())
                             .unwrap_or_else(|| "Untitled".to_string());
-                        let message = format!("'{name}'에 저장되지 않은 변경 사항이 있습니다.");
+                        let message = format!("'{name}' has unsaved changes.");
                         let buttons = vec![
-                            "저장 후 닫기".to_string(),
-                            "저장 안 하고 닫기".to_string(),
-                            "취소".to_string(),
+                            "Save & Close".to_string(),
+                            "Close Without Saving".to_string(),
+                            "Cancel".to_string(),
                         ];
                         self.editor.confirm_dialog = Some(ConfirmDialog::new(
                             ConfirmAction::CloseTab(doc_id),
@@ -1264,7 +1264,7 @@ impl App {
                                 self.close_tab_for_doc(doc_id);
                             }
                             Err(e) => {
-                                self.editor.status_message = Some(format!("저장 실패: {e}"));
+                                self.editor.status_message = Some(format!("Save failed: {e}"));
                             }
                         }
                     }
@@ -1297,7 +1297,7 @@ impl App {
                                     self.dispatch_plugin_hook(HookEvent::OnSave { path, filename });
                                 }
                                 Err(e) => {
-                                    self.editor.status_message = Some(format!("저장 실패: {e}"));
+                                    self.editor.status_message = Some(format!("Save failed: {e}"));
                                     return;
                                 }
                             }
