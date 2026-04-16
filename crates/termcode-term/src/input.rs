@@ -95,6 +95,8 @@ impl InputMapper {
             (key(none, KeyCode::Right), "explorer.expand"),
             (key(none, KeyCode::Char('h')), "explorer.collapse"),
             (key(none, KeyCode::Left), "explorer.collapse"),
+            (key(none, KeyCode::Char('r')), "explorer.refresh"),
+            (key(shift, KeyCode::Char('R')), "explorer.refresh_all"),
             (key(none, KeyCode::Esc), "mode.normal"),
             (key(none, KeyCode::Tab), "mode.normal"),
         ];

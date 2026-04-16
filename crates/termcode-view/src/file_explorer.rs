@@ -105,6 +105,45 @@ impl FileExplorer {
         Ok(())
     }
 
+    /// Refresh only the selected node's directory.
+    /// If the selected node is a file/symlink, refreshes its parent directory instead.
+    pub fn refresh_node(&mut self, index: usize) -> anyhow::Result<()> {
+        if index >= self.tree.len() {
+            return self.refresh();
+        }
+
+        // Find the target directory index to refresh
+        let dir_index = if self.tree[index].kind == FileNodeKind::Directory {
+            index
+        } else {
+            // Walk backwards to find parent directory
+            let target_depth = self.tree[index].depth.saturating_sub(1);
+            let mut parent = None;
+            for i in (0..index).rev() {
+                if self.tree[i].kind == FileNodeKind::Directory
+                    && self.tree[i].depth == target_depth
+                {
+                    parent = Some(i);
+                    break;
+                }
+            }
+            match parent {
+                Some(i) => i,
+                None => return self.refresh(),
+            }
+        };
+
+        // Collapse then re-expand to reload children
+        if self.tree[dir_index].expanded {
+            self.toggle_expand(dir_index)?; // collapse
+        }
+        self.toggle_expand(dir_index)?; // expand with fresh data
+
+        self.selected = self.selected.min(self.tree.len().saturating_sub(1));
+        self.ensure_visible(self.viewport_height);
+        Ok(())
+    }
+
     pub fn selected_path(&self) -> Option<&Path> {
         self.tree.get(self.selected).map(|n| n.path.as_path())
     }

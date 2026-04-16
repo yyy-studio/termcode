@@ -653,6 +653,17 @@ impl App {
                     "explorer.enter" => self.handle_explorer_enter(),
                     "explorer.expand" => self.handle_explorer_expand(),
                     "explorer.collapse" => self.handle_explorer_collapse(),
+                    "explorer.refresh" => {
+                        let selected = self.editor.file_explorer.selected;
+                        if let Err(e) = self.editor.file_explorer.refresh_node(selected) {
+                            self.editor.status_message = Some(format!("Refresh failed: {e}"));
+                        }
+                    }
+                    "explorer.refresh_all" => {
+                        if let Err(e) = self.editor.file_explorer.refresh() {
+                            self.editor.status_message = Some(format!("Refresh failed: {e}"));
+                        }
+                    }
                     "mode.normal" => self.editor.switch_mode(EditorMode::Normal),
                     _ => {}
                 }
