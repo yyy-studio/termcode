@@ -20,6 +20,10 @@
 
 ---
 
+<p align="center">
+  <img src="screenshots/screenshot1.png" alt="termcode screenshot">
+</p>
+
 **termcode** is a modern terminal-based code editor that combines the speed of terminal editors with IDE-grade features. Built from scratch in Rust with a modular crate architecture, it delivers native performance, full LSP support, and first-class CJK character handling.
 
 ## Highlights
