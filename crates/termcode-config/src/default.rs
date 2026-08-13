@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 /// Get the default configuration directory path.
-/// Returns `~/.config/termcode` on macOS/Linux, `%APPDATA%\termcode` on Windows.
+/// Returns `$XDG_CONFIG_HOME/termcode` (default `~/.config/termcode`) on macOS/Linux,
+/// `%APPDATA%\termcode` on Windows. This matches the layout install.sh creates.
 pub fn config_dir() -> PathBuf {
     dirs_or_default("termcode")
 }
@@ -55,9 +56,71 @@ pub fn runtime_dir() -> PathBuf {
 }
 
 fn dirs_or_default(app_name: &str) -> PathBuf {
+    // On Unix (including macOS) follow the XDG convention that install.sh uses.
+    // `dirs::config_dir()` would resolve to ~/Library/Application Support on macOS,
+    // where the installed runtime and user config never live.
+    #[cfg(unix)]
+    {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty());
+        if let Some(dir) = unix_config_dir(xdg, dirs::home_dir(), app_name) {
+            return dir;
+        }
+    }
+
     if let Some(config) = dirs::config_dir() {
         config.join(app_name)
     } else {
         PathBuf::from(".").join(format!(".{app_name}"))
+    }
+}
+
+/// Resolve the XDG-style config directory: `$XDG_CONFIG_HOME/<app>` when set,
+/// otherwise `~/.config/<app>`. Returns `None` when the home directory is unknown.
+#[cfg(unix)]
+fn unix_config_dir(
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+    app_name: &str,
+) -> Option<PathBuf> {
+    match xdg_config_home {
+        Some(xdg) => Some(PathBuf::from(xdg).join(app_name)),
+        None => home.map(|home| home.join(".config").join(app_name)),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_dir_uses_dot_config_by_default() {
+        let dir = unix_config_dir(None, Some(PathBuf::from("/home/u")), "termcode");
+        assert_eq!(dir, Some(PathBuf::from("/home/u/.config/termcode")));
+    }
+
+    #[test]
+    fn config_dir_honors_xdg_config_home() {
+        let dir = unix_config_dir(
+            Some("/custom/cfg".into()),
+            Some(PathBuf::from("/home/u")),
+            "termcode",
+        );
+        assert_eq!(dir, Some(PathBuf::from("/custom/cfg/termcode")));
+    }
+
+    #[test]
+    fn config_dir_without_home_is_none() {
+        assert_eq!(unix_config_dir(None, None, "termcode"), None);
+    }
+
+    #[test]
+    fn config_dir_is_not_application_support() {
+        // Regression: on macOS `dirs::config_dir()` points at
+        // ~/Library/Application Support, where install.sh never writes.
+        let dir = config_dir();
+        assert!(
+            !dir.to_string_lossy().contains("Application Support"),
+            "got {dir:?}"
+        );
     }
 }
