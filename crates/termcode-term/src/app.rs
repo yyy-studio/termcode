@@ -1165,8 +1165,15 @@ impl App {
                 }
             }
         }
+        self.after_tab_close();
+    }
+
+    /// Move focus after a tab is closed: to the remaining active tab, or to the
+    /// file tree when no tabs are left.
+    fn after_tab_close(&mut self) {
         if self.editor.tabs.tabs.is_empty() {
             self.editor.active_view = None;
+            self.show_sidebar();
         } else {
             self.sync_active_view_to_tab();
         }
@@ -1342,11 +1349,7 @@ impl App {
         self.lsp_notify_did_close(doc_id);
         self.editor.close_document(doc_id);
 
-        if self.editor.tabs.tabs.is_empty() {
-            self.editor.active_view = None;
-        } else {
-            self.sync_active_view_to_tab();
-        }
+        self.after_tab_close();
     }
 
     fn doc_path_info(
