@@ -2158,6 +2158,7 @@ dependencies = [
  "termcode-theme",
  "termcode-view",
  "tokio",
+ "toml",
  "unicode-width 0.2.0",
 ]
 

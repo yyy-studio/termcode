@@ -1,0 +1,138 @@
+[meta]
+name = "helix"
+description = "Helix-style modal keymap built around the Space leader and g/[/] prefixes."
+
+# A preset defines the whole keymap: anything omitted here is unbound.
+#
+# Deliberate departures from Helix, and why:
+#   - Helix is selection-first (`x` extends a line selection, `d` deletes the
+#     selection). termcode has no multi-selection model yet, so `d d` deletes a
+#     line and `x` is not bound to selection.
+#   - Ctrl+Z stays unbound so the terminal's suspend behaviour is not shadowed;
+#     undo is `u`, redo is `shift+u`, as in Helix.
+#   - Helix's `space y` / `space p` (system clipboard) are left out: without a
+#     selection model `clipboard.copy` and `clipboard.cut` have nothing to act
+#     on. `y` and `p` already go through the system clipboard line-wise, which
+#     covers the same ground until selections exist.
+
+[global]
+"ctrl+s" = "file.save"
+"f1" = "help.toggle"
+
+[mode.normal]
+# Motions
+"h" = "cursor.left"
+"j" = "cursor.down"
+"k" = "cursor.up"
+"l" = "cursor.right"
+"left" = "cursor.left"
+"down" = "cursor.down"
+"up" = "cursor.up"
+"right" = "cursor.right"
+"w" = "cursor.word_next"
+"b" = "cursor.word_prev"
+"e" = "cursor.word_end"
+"pagedown" = "cursor.page_down"
+"pageup" = "cursor.page_up"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+
+# `g` goto prefix
+"g g" = "cursor.home"
+"g e" = "cursor.end"
+"g h" = "cursor.line_start"
+"g l" = "cursor.line_end"
+"g s" = "cursor.line_first_nonblank"
+"g d" = "goto.definition"
+"g n" = "tab.next"
+"g p" = "tab.prev"
+
+# Entering Insert mode
+"i" = "mode.insert"
+"a" = "mode.insert_after"
+"shift+i" = "mode.insert_line_start"
+"shift+a" = "mode.insert_line_end"
+"o" = "edit.open_below"
+"shift+o" = "edit.open_above"
+
+# Editing. Helix would select first and then act on the selection; without a
+# selection model, `d`/`y` act on the cursor and the line. The `x d` / `x y`
+# sequences keep the "select line, then act" muscle memory intact.
+"d" = "edit.delete_char"
+"delete" = "edit.delete_char"
+"x d" = "edit.delete_line"
+"x y" = "edit.yank_line"
+"y" = "edit.yank_line"
+"p" = "edit.paste_after"
+"shift+p" = "edit.paste_before"
+"u" = "edit.undo"
+"shift+u" = "edit.redo"
+
+# Search
+"/" = "search.open"
+"n" = "search.next"
+"shift+n" = "search.prev"
+":" = "palette.open"
+"shift+:" = "palette.open"
+
+# `[` / `]` diagnostic prefixes
+"] d" = "diagnostic.next"
+"[ d" = "diagnostic.prev"
+
+# Space leader
+"space f" = "fuzzy.open"
+"space k" = "lsp.hover"
+"space e" = "view.toggle_sidebar"
+"space /" = "search.open"
+"space q" = "tab.close"
+"space w" = "file.save"
+"space shift+q" = "app.quit"
+"space ?" = "help.toggle"
+
+[mode.insert]
+"esc" = "mode.normal"
+"backspace" = "edit.backspace"
+"delete" = "edit.delete_char"
+"enter" = "edit.newline"
+"up" = "cursor.up"
+"down" = "cursor.down"
+"left" = "cursor.left"
+"right" = "cursor.right"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+# Helix keeps the readline word-delete in Insert mode. Mode bindings outrank
+# global ones, so this cannot fall through to "close tab".
+"ctrl+w" = "edit.delete_word_before"
+
+[mode.file_explorer]
+"j" = "explorer.down"
+"k" = "explorer.up"
+"down" = "explorer.down"
+"up" = "explorer.up"
+"enter" = "explorer.enter"
+"l" = "explorer.expand"
+"right" = "explorer.expand"
+"h" = "explorer.collapse"
+"left" = "explorer.collapse"
+"r" = "explorer.refresh"
+"shift+r" = "explorer.refresh_all"
+"esc" = "mode.normal"
+"tab" = "mode.normal"
+
+[mode.search]
+"esc" = "search.close"
+"enter" = "search.next"
+
+[mode.fuzzy_finder]
+"esc" = "fuzzy.close"
+"up" = "fuzzy.up"
+"down" = "fuzzy.down"
+"ctrl+p" = "fuzzy.up"
+"ctrl+n" = "fuzzy.down"
+
+[mode.command_palette]
+"esc" = "palette.close"
+"up" = "palette.up"
+"down" = "palette.down"
+"ctrl+p" = "palette.up"
+"ctrl+n" = "palette.down"

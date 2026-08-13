@@ -3,6 +3,7 @@ use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::Show;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
@@ -34,11 +35,15 @@ use ratatui_image::protocol::StatefulProtocol;
 use termcode_plugin::{DeferredAction, HookEvent, PluginManager};
 use termcode_view::image::ImageId;
 
-use crate::input::InputMapper;
+use crate::input::{InputMapper, KeyResolution};
 use crate::layout;
 use crate::lsp_bridge::LspBridge;
 use crate::mouse::{self, MouseAction};
 use crate::render;
+
+/// Palette id for "no preset": the built-in keymap. Not a filename, so it
+/// cannot clash with a preset discovered on disk.
+const BUILTIN_KEYMAP: &str = "(built-in)";
 
 pub struct App {
     editor: Editor,
@@ -57,6 +62,12 @@ pub struct App {
     image_picker: Option<Picker>,
     pub image_cache: HashMap<ImageId, Mutex<StatefulProtocol>>,
     plugin_manager: Option<PluginManager>,
+    /// User keybinding overrides, kept so a live keymap switch can re-apply them.
+    kb_config: termcode_config::keymap::KeybindingConfig,
+    /// How long a partially typed chord stays pending before it is abandoned.
+    chord_timeout: Duration,
+    /// When the current pending chord started, for the timeout above.
+    chord_started: Option<Instant>,
 }
 
 impl App {
@@ -105,18 +116,55 @@ impl App {
         }
         editor.file_explorer.width = app_config.ui.sidebar_width;
         editor.file_explorer.visible = app_config.ui.sidebar_visible;
+        // Startup problems accumulate: a user with both a bad theme and a bad
+        // keymap preset should hear about both, not just the last one.
+        let mut startup_warnings: Vec<String> = Vec::new();
         if let Some(msg) = startup_theme_status {
-            editor.status_message = Some(msg);
+            startup_warnings.push(msg);
         }
         editor.clipboard = Some(Box::new(crate::clipboard::ArboardClipboard::new()));
 
         let mut command_registry = CommandRegistry::new();
         register_builtin_commands(&mut command_registry);
 
-        let mut input_mapper = InputMapper::new();
         let keybindings_path = termcode_config::default::config_dir().join("keybindings.toml");
         let kb_config = termcode_config::keymap::load_keybindings(&keybindings_path);
-        input_mapper.apply_overrides(&kb_config, &command_registry);
+
+        // Read the preset once: the mapper is rebuilt after plugins register
+        // their commands, and re-reading would repeat any parse warning.
+        let preset = match &app_config.keymap.preset {
+            Some(name) => match termcode_config::keymap::load_keymap_preset(name) {
+                Some(preset) => {
+                    // The loader logs these too, but a half-bound keymap is
+                    // confusing enough that the user should not have to go
+                    // looking in a log file for the reason.
+                    startup_warnings.extend(
+                        preset
+                            .warnings()
+                            .into_iter()
+                            .map(|w| format!("Keymap '{name}': {w}")),
+                    );
+                    Some(preset)
+                }
+                None => {
+                    log::warn!("Keymap preset '{name}' not found; using the built-in keymap");
+                    startup_warnings
+                        .push(format!("Keymap preset '{name}' not found (using default)"));
+                    None
+                }
+            },
+            None => None,
+        };
+        // A keymap with no modal layer has to say so, or the editor would open
+        // in Normal mode where that keymap binds almost nothing.
+        if preset.as_ref().is_some_and(|p| p.meta.starts_in_insert()) {
+            editor.default_mode = EditorMode::Insert;
+        }
+        editor.switch_to_default_mode();
+        let mut input_mapper = build_input_mapper(preset.as_ref(), &command_registry, &kb_config);
+        if !startup_warnings.is_empty() {
+            editor.status_message = Some(startup_warnings.join("  |  "));
+        }
 
         let (lsp_event_tx, lsp_event_rx) = mpsc::unbounded_channel();
 
@@ -151,7 +199,10 @@ impl App {
                         });
                     }
 
-                    input_mapper.apply_overrides(&kb_config, &command_registry);
+                    // Rebuild now that plugin commands exist, so a keymap can
+                    // bind them.
+                    input_mapper =
+                        build_input_mapper(preset.as_ref(), &command_registry, &kb_config);
 
                     Some(pm)
                 }
@@ -180,6 +231,9 @@ impl App {
             image_picker,
             image_cache: HashMap::new(),
             plugin_manager,
+            kb_config,
+            chord_timeout: Duration::from_millis(app_config.keymap.chord_timeout_ms),
+            chord_started: None,
         }
     }
 
@@ -255,8 +309,17 @@ impl App {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut terminal = setup_terminal(self.editor.config.mouse_enabled)?;
 
+        // Settle the resting mode now that startup files are open: a non-modal
+        // keymap wants Insert, which needs a view to exist first. Callers open
+        // files between `new()` and `run()`, so this cannot happen any earlier.
+        if self.editor.mode == EditorMode::Normal {
+            self.editor.switch_to_default_mode();
+        }
+
         let app_result = (|| -> anyhow::Result<()> {
-            terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
+            terminal.draw(|frame| {
+                render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
+            })?;
 
             self.dispatch_plugin_hook(HookEvent::OnReady);
 
@@ -315,7 +378,9 @@ impl App {
                 }
 
                 self.editor.sync_tab_modified();
-                terminal.draw(|frame| render::render(frame, &self.editor, &self.image_cache))?;
+                terminal.draw(|frame| {
+                    render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
+                })?;
             }
 
             Ok(())
@@ -353,7 +418,7 @@ impl App {
             }
             if session.active_tab < self.editor.tabs.tabs.len() {
                 self.editor.tabs.set_active(session.active_tab);
-                self.sync_active_view_to_tab();
+                self.editor.sync_active_view_to_tab();
             }
         }
     }
@@ -406,7 +471,7 @@ impl App {
             AppEvent::Resize(_, _) => {
                 // Re-render happens automatically
             }
-            AppEvent::Tick => {}
+            AppEvent::Tick => self.expire_pending_chord(),
             AppEvent::Lsp(response) => self.handle_lsp_response(response),
         }
     }
@@ -415,6 +480,9 @@ impl App {
         if self.editor.confirm_dialog.is_some() {
             return;
         }
+        // A click can move the cursor or change the mode, so a chord started
+        // before it would complete against the wrong target.
+        self.abandon_pending_chord();
         let (w, h) = self.terminal_size;
         let area = ratatui::layout::Rect::new(0, 0, w, h);
         let app_layout = layout::compute_layout(
@@ -432,7 +500,7 @@ impl App {
             }
             MouseAction::SwitchTab(index) => {
                 self.editor.tabs.set_active(index);
-                self.sync_active_view_to_tab();
+                self.editor.sync_active_view_to_tab();
             }
         }
     }
@@ -513,23 +581,19 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         // Confirm dialog intercept: consume ALL keys while dialog is active
         if self.editor.confirm_dialog.is_some() {
+            // A chord left pending here would be flushed into the buffer by the
+            // timeout while the dialog is up, or resume against the next key
+            // after the dialog closes.
+            self.abandon_pending_chord();
             self.handle_confirm_key(key);
             return;
         }
 
+        // Always-available escape hatch. A keymap can also bind `app.quit`, but
+        // must never be able to leave the editor with no way out.
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('q') {
+            self.abandon_pending_chord();
             self.handle_quit();
-            return;
-        }
-
-        // Ctrl+C: copy selection to clipboard.
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
-            if let Err(e) = self
-                .command_registry
-                .execute("clipboard.copy", &mut self.editor)
-            {
-                self.editor.status_message = Some(format!("Error: {e}"));
-            }
             return;
         }
 
@@ -561,120 +625,366 @@ impl App {
             _ => {}
         }
 
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('w') {
-            self.handle_close_tab_with_confirm();
+        if self.handle_completion_popup_key(key) {
             return;
         }
 
-        if let Some(cmd_id) = self.input_mapper.resolve_global(key) {
-            self.dispatch_command(cmd_id);
+        if self.run_bound_command(key) {
             return;
         }
 
         if self.editor.mode == EditorMode::Insert {
-            if self.editor.completion.visible {
-                match key.code {
-                    KeyCode::Down => {
-                        let len = self.editor.completion.items.len();
-                        if len > 0 {
-                            self.editor.completion.selected =
-                                (self.editor.completion.selected + 1) % len;
-                        }
-                        return;
-                    }
-                    KeyCode::Up => {
-                        let len = self.editor.completion.items.len();
-                        if len > 0 {
-                            self.editor.completion.selected =
-                                (self.editor.completion.selected + len - 1) % len;
-                        }
-                        return;
-                    }
-                    KeyCode::Enter | KeyCode::Tab => {
-                        self.accept_completion();
-                        return;
-                    }
-                    KeyCode::Esc => {
-                        self.editor.completion.visible = false;
-                        return;
-                    }
-                    _ => {
-                        self.editor.completion.visible = false;
-                    }
-                }
-            }
+            self.handle_insert_key(key);
+        }
+    }
 
-            if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char(' ') {
-                self.trigger_completion();
-                return;
-            }
-
-            if key.code == KeyCode::Tab && key.modifiers.is_empty() {
-                let text = if self.editor.config.insert_spaces {
-                    " ".repeat(self.editor.config.tab_size)
-                } else {
-                    "\t".to_string()
-                };
-                for c in text.chars() {
-                    if let Err(e) = insert_char(&mut self.editor, c) {
-                        self.editor.status_message = Some(format!("Error: {e}"));
-                        break;
-                    }
+    /// Let the completion popup have the keys it owns while it is open.
+    /// Returns whether the key was consumed.
+    ///
+    /// The popup binds Up/Down/Enter/Tab/Esc, which the Insert-mode keymap also
+    /// binds to cursor motion and newline; while it is up, the popup wins.
+    fn handle_completion_popup_key(&mut self, key: KeyEvent) -> bool {
+        if self.editor.mode != EditorMode::Insert || !self.editor.completion.visible {
+            return false;
+        }
+        // The popup can appear asynchronously mid-chord. A key it consumes never
+        // reaches the mapper, so the chord cannot continue across it: end it
+        // here and keep what was typed.
+        if matches!(
+            key.code,
+            KeyCode::Down | KeyCode::Up | KeyCode::Enter | KeyCode::Tab | KeyCode::Esc
+        ) {
+            self.recover_pending_chord();
+        }
+        let item_count = self.editor.completion.items.len();
+        match key.code {
+            KeyCode::Down => {
+                if item_count > 0 {
+                    self.editor.completion.selected =
+                        (self.editor.completion.selected + 1) % item_count;
                 }
-                self.lsp_notify_did_change();
-                let (path, filename) = self.active_doc_path_info();
-                self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
-                return;
+                true
             }
-
-            if let KeyCode::Char(c) = key.code {
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    if let Err(e) = insert_char(&mut self.editor, c) {
-                        self.editor.status_message = Some(format!("Error: {e}"));
-                    }
-                    self.lsp_notify_did_change();
-                    let (path, filename) = self.active_doc_path_info();
-                    self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
-                    self.maybe_trigger_completion(c);
-                    return;
+            KeyCode::Up => {
+                if item_count > 0 {
+                    self.editor.completion.selected =
+                        (self.editor.completion.selected + item_count - 1) % item_count;
                 }
+                true
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.accept_completion();
+                true
+            }
+            KeyCode::Esc => {
+                self.editor.completion.visible = false;
+                true
+            }
+            // Any other key is ordinary input: dismiss the popup and let the
+            // keymap have it.
+            _ => {
+                self.editor.completion.visible = false;
+                false
             }
         }
+    }
 
-        if self.editor.mode == EditorMode::FileExplorer {
-            if let Some(cmd_id) = self.input_mapper.resolve(EditorMode::FileExplorer, key) {
-                match cmd_id {
-                    "explorer.down" => {
-                        let style = self.editor.file_tree_style;
-                        self.editor.file_explorer.move_selection(1, &style);
+    /// Resolve `key` through the keymap and run whatever it maps to. Returns
+    /// whether the key was accounted for; `false` means nothing is bound to it
+    /// and the caller may treat it as input.
+    fn run_bound_command(&mut self, key: KeyEvent) -> bool {
+        // Runs at most twice: a dead chord in Insert mode types its prefix and
+        // then re-resolves the key that ended it, which cannot itself find a
+        // pending chord because the buffer was just cleared.
+        loop {
+            let abandoned: Vec<KeyEvent> = self.input_mapper.pending().to_vec();
+            match self.feed_key(self.editor.mode, key) {
+                KeyResolution::Pending => return true,
+                KeyResolution::Match(cmd_id) => {
+                    if let Some(explorer_cmd) = cmd_id.strip_prefix("explorer.") {
+                        self.dispatch_explorer_command(explorer_cmd);
+                    } else {
+                        self.dispatch_command(cmd_id);
                     }
-                    "explorer.up" => {
-                        let style = self.editor.file_tree_style;
-                        self.editor.file_explorer.move_selection(-1, &style);
-                    }
-                    "explorer.enter" => self.handle_explorer_enter(),
-                    "explorer.expand" => self.handle_explorer_expand(),
-                    "explorer.collapse" => self.handle_explorer_collapse(),
-                    "explorer.refresh" => {
-                        let selected = self.editor.file_explorer.selected;
-                        if let Err(e) = self.editor.file_explorer.refresh_node(selected) {
-                            self.editor.status_message = Some(format!("Refresh failed: {e}"));
-                        }
-                    }
-                    "explorer.refresh_all" => {
-                        if let Err(e) = self.editor.file_explorer.refresh() {
-                            self.editor.status_message = Some(format!("Refresh failed: {e}"));
-                        }
-                    }
-                    "mode.normal" => self.editor.switch_mode(EditorMode::Normal),
-                    _ => {}
+                    return true;
                 }
+                KeyResolution::NoMatch if !abandoned.is_empty() => {
+                    // The chord died. While typing, its keys were real input and
+                    // must reappear as text -- an insert-mode chord like `j k`
+                    // otherwise eats every stray `j`. Elsewhere they are
+                    // discarded, and the terminating key with them.
+                    if self.editor.mode != EditorMode::Insert {
+                        return true;
+                    }
+                    let chars: Vec<char> = abandoned.iter().filter_map(Self::typed_char).collect();
+                    if let Some(c) = Self::typed_char(&key) {
+                        // Both are text: type them together so one keystroke
+                        // still produces one `didChange`.
+                        let mut all = chars;
+                        all.push(c);
+                        self.insert_typed_text(&all);
+                        return true;
+                    }
+                    // The terminator carries no text (Esc, Enter, Backspace...).
+                    // The mapper only ever saw it as the tail of a dead
+                    // sequence, so give it a fresh chance to resolve -- `Esc`
+                    // must still leave Insert mode.
+                    self.insert_typed_text(&chars);
+                    continue;
+                }
+                KeyResolution::NoMatch => return false,
             }
+        }
+    }
+
+    /// Handle a key that Insert mode binds to nothing: the completion trigger,
+    /// indentation, or plain typing.
+    fn handle_insert_key(&mut self, key: KeyEvent) {
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char(' ') {
+            self.trigger_completion();
             return;
         }
 
-        if let Some(cmd_id) = self.input_mapper.resolve(self.editor.mode, key) {
-            self.dispatch_command(cmd_id);
+        if key.code == KeyCode::Tab && key.modifiers.is_empty() {
+            // Indentation is not typed text: it must not offer completions the
+            // way pressing space or a letter does.
+            let indent = self.indent_chars();
+            self.insert_text(&indent);
+            return;
+        }
+
+        if let Some(c) = Self::typed_char(&key) {
+            self.insert_typed_text(&[c]);
+        }
+    }
+
+    /// Feed a key to the mapper, keeping the chord timeout in sync with the
+    /// result.
+    fn feed_key(&mut self, mode: EditorMode, key: KeyEvent) -> KeyResolution {
+        let resolution = self.input_mapper.resolve_key(mode, key);
+        // Restart the clock on every key that advances the chord, so
+        // `chord_timeout_ms` is the gap a user gets between keys rather than a
+        // budget for the whole sequence -- a three-key chord would otherwise
+        // leave almost no time for its last key.
+        self.chord_started = match resolution {
+            KeyResolution::Pending => Some(Instant::now()),
+            _ => None,
+        };
+        resolution
+    }
+
+    /// Feed a key to the mapper on behalf of an overlay, putting the keys of a
+    /// chord that dies back into the overlay's input.
+    ///
+    /// Every overlay needs this: keys typed there are query text first and
+    /// commands second, so a sequence that turns out to be bound to nothing has
+    /// to reappear in the query rather than vanish.
+    fn feed_overlay_key(&mut self, mode: EditorMode, key: KeyEvent) -> KeyResolution {
+        let abandoned: Vec<KeyEvent> = self.input_mapper.pending().to_vec();
+        let resolution = self.feed_key(mode, key);
+        if resolution == KeyResolution::NoMatch {
+            self.flush_chord_into_overlay(&abandoned);
+        }
+        resolution
+    }
+
+    /// Forget a chord in progress without typing its keys.
+    fn abandon_pending_chord(&mut self) {
+        if self.input_mapper.clear_pending() {
+            self.chord_started = None;
+        }
+    }
+
+    /// Give up on a chord, putting its keys back as text wherever they were
+    /// typed. Use this when something else claims the keyboard mid-chord; use
+    /// [`App::abandon_pending_chord`] when the keys should simply be dropped.
+    fn recover_pending_chord(&mut self) {
+        let abandoned: Vec<KeyEvent> = self.input_mapper.pending().to_vec();
+        if abandoned.is_empty() {
+            return;
+        }
+        self.input_mapper.clear_pending();
+        self.chord_started = None;
+        match self.editor.mode {
+            EditorMode::Insert => self.flush_chord_as_text(&abandoned),
+            EditorMode::Search | EditorMode::FuzzyFinder | EditorMode::CommandPalette => {
+                self.flush_chord_into_overlay(&abandoned)
+            }
+            _ => {}
+        }
+    }
+
+    /// Drop a chord the user started but never finished.
+    fn expire_pending_chord(&mut self) {
+        // A dialog owns the screen; flushing chord keys into the buffer behind
+        // it would modify a document the user is being asked about.
+        if self.editor.confirm_dialog.is_some() {
+            return;
+        }
+        let Some(started) = self.chord_started else {
+            return;
+        };
+        if started.elapsed() < self.chord_timeout {
+            return;
+        }
+        self.recover_pending_chord();
+    }
+
+    /// Insert a character into whichever overlay input is focused.
+    ///
+    /// Overlays own their keys, so this is also how a dead chord's prefix gets
+    /// back into the query it was typed into.
+    fn overlay_insert_char(&mut self, c: char) {
+        let Some((text, cursor)) = self.overlay_input() else {
+            return;
+        };
+        let byte_idx = char_to_byte_index(text, *cursor);
+        text.insert(byte_idx, c);
+        *cursor += 1;
+        self.overlay_requery();
+    }
+
+    /// Delete the character before the cursor of the focused overlay input.
+    fn overlay_backspace(&mut self) {
+        let Some((text, cursor)) = self.overlay_input() else {
+            return;
+        };
+        if *cursor == 0 {
+            return;
+        }
+        let byte_idx = char_to_byte_index(text, *cursor - 1);
+        text.remove(byte_idx);
+        *cursor -= 1;
+        self.overlay_requery();
+    }
+
+    /// The text input the focused overlay is editing, with its cursor. `None`
+    /// outside the overlay modes, where there is no input to edit.
+    fn overlay_input(&mut self) -> Option<(&mut String, &mut usize)> {
+        match self.editor.mode {
+            EditorMode::Search if self.editor.search.replace_focused => Some((
+                &mut self.editor.search.replace_text,
+                &mut self.editor.search.replace_cursor_pos,
+            )),
+            EditorMode::Search => Some((
+                &mut self.editor.search.query,
+                &mut self.editor.search.cursor_pos,
+            )),
+            EditorMode::FuzzyFinder => Some((
+                &mut self.editor.fuzzy_finder.query,
+                &mut self.editor.fuzzy_finder.cursor_pos,
+            )),
+            EditorMode::CommandPalette => Some((
+                &mut self.editor.command_palette.query,
+                &mut self.editor.command_palette.cursor_pos,
+            )),
+            _ => None,
+        }
+    }
+
+    /// Re-apply the overlay's filter after its input changed.
+    fn overlay_requery(&mut self) {
+        // Editing the replace field changes no matches, so it needs no re-filter.
+        match self.editor.mode {
+            EditorMode::Search if !self.editor.search.replace_focused => {
+                rerun_search(&mut self.editor)
+            }
+            EditorMode::FuzzyFinder => self.editor.fuzzy_finder.update_filter(),
+            EditorMode::CommandPalette => self.editor.command_palette.update_filter(),
+            _ => {}
+        }
+    }
+
+    /// Put a dead chord's keys back into the overlay input they were typed into.
+    fn flush_chord_into_overlay(&mut self, keys: &[KeyEvent]) {
+        for c in keys.iter().filter_map(Self::typed_char) {
+            self.overlay_insert_char(c);
+        }
+    }
+
+    /// Whether a key event carries text a user meant to type.
+    fn typed_char(key: &KeyEvent) -> Option<char> {
+        let KeyCode::Char(c) = key.code else {
+            return None;
+        };
+        (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT).then_some(c)
+    }
+
+    /// The characters one Tab press inserts.
+    fn indent_chars(&self) -> Vec<char> {
+        if self.editor.config.insert_spaces {
+            vec![' '; self.editor.config.tab_size]
+        } else {
+            vec!['\t']
+        }
+    }
+
+    /// Insert characters into the active document and tell everyone who needs
+    /// to know. Returns the last character that made it in.
+    ///
+    /// The single path for text entry: notifications go out once for the whole
+    /// batch, so a recovered chord still produces one `didChange`, exactly as a
+    /// single keystroke does.
+    fn insert_text(&mut self, chars: &[char]) -> Option<char> {
+        let mut inserted = None;
+        for &c in chars {
+            if let Err(e) = insert_char(&mut self.editor, c) {
+                self.editor.status_message = Some(format!("Error: {e}"));
+                break;
+            }
+            inserted = Some(c);
+        }
+        inserted?;
+        self.lsp_notify_did_change();
+        let (path, filename) = self.active_doc_path_info();
+        self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
+        inserted
+    }
+
+    /// Insert text the user typed, offering completions on the last character
+    /// the way a live keystroke should.
+    fn insert_typed_text(&mut self, chars: &[char]) {
+        if let Some(last) = self.insert_text(chars) {
+            self.maybe_trigger_completion(last);
+        }
+    }
+
+    /// Type out the keys of a chord that never completed.
+    ///
+    /// Only printable keys can be recovered; a modifier combo held as a chord
+    /// prefix has no text to insert and is simply dropped.
+    fn flush_chord_as_text(&mut self, keys: &[KeyEvent]) {
+        let chars: Vec<char> = keys.iter().filter_map(Self::typed_char).collect();
+        self.insert_typed_text(&chars);
+    }
+
+    /// Run a file-explorer command. These live in `App` because they operate on
+    /// the explorer tree rather than on a document.
+    fn dispatch_explorer_command(&mut self, command: &str) {
+        match command {
+            "down" => {
+                let style = self.editor.file_tree_style;
+                self.editor.file_explorer.move_selection(1, &style);
+            }
+            "up" => {
+                let style = self.editor.file_tree_style;
+                self.editor.file_explorer.move_selection(-1, &style);
+            }
+            "enter" => self.handle_explorer_enter(),
+            "expand" => self.handle_explorer_expand(),
+            "collapse" => self.handle_explorer_collapse(),
+            "refresh" => {
+                let selected = self.editor.file_explorer.selected;
+                if let Err(e) = self.editor.file_explorer.refresh_node(selected) {
+                    self.editor.status_message = Some(format!("Refresh failed: {e}"));
+                }
+            }
+            "refresh_all" => {
+                if let Err(e) = self.editor.file_explorer.refresh() {
+                    self.editor.status_message = Some(format!("Refresh failed: {e}"));
+                }
+            }
+            other => log::warn!("Unknown explorer command: explorer.{other}"),
         }
     }
 
@@ -759,20 +1069,22 @@ impl App {
     }
 
     fn dispatch_command(&mut self, cmd_id: &str) {
-        if cmd_id == "palette.open" {
-            self.open_command_palette();
-            return;
-        }
-        if cmd_id == "goto.definition" {
-            self.request_definition();
-            return;
-        }
-        if cmd_id == "lsp.hover" {
-            self.request_hover();
-            return;
-        }
-        if cmd_id == "lsp.trigger_completion" {
-            self.trigger_completion();
+        // Commands the registry holds only as noops because their behaviour
+        // needs `App`; see `register_app_level_commands`. They must be caught
+        // here, before the registry would run the noop.
+        let app_level: Option<fn(&mut Self)> = match cmd_id {
+            "app.quit" => Some(Self::handle_quit),
+            "tab.close" => Some(Self::handle_close_tab_with_confirm),
+            "palette.open" => Some(Self::open_command_palette),
+            "theme.list" => Some(Self::open_theme_palette),
+            "keymap.list" => Some(Self::open_keymap_palette),
+            "goto.definition" => Some(Self::request_definition),
+            "lsp.hover" => Some(Self::request_hover),
+            "lsp.trigger_completion" => Some(Self::trigger_completion),
+            _ => None,
+        };
+        if let Some(run) = app_level {
+            run(self);
             return;
         }
 
@@ -815,25 +1127,18 @@ impl App {
     }
 
     fn handle_search_key(&mut self, key: KeyEvent) {
-        if let Some(cmd_id) = self.input_mapper.resolve(EditorMode::Search, key) {
-            // When replace field is focused, Enter replaces current match
-            if cmd_id == "search.next" && self.editor.search.replace_focused {
-                if let Err(e) = self
-                    .command_registry
-                    .execute("search.replace_current", &mut self.editor)
-                {
-                    self.editor.status_message = Some(format!("Error: {e}"));
-                } else {
-                    self.lsp_notify_did_change();
-                    let (path, filename) = self.active_doc_path_info();
-                    self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
+        match self.feed_overlay_key(EditorMode::Search, key) {
+            KeyResolution::Pending => return,
+            KeyResolution::Match(cmd_id) => {
+                // When replace field is focused, Enter replaces current match
+                if cmd_id == "search.next" && self.editor.search.replace_focused {
+                    self.dispatch_command("search.replace_current");
+                    return;
                 }
+                self.dispatch_command(cmd_id);
                 return;
             }
-            if let Err(e) = self.command_registry.execute(cmd_id, &mut self.editor) {
-                self.editor.status_message = Some(format!("Error: {e}"));
-            }
-            return;
+            KeyResolution::NoMatch => {}
         }
 
         if key.code == KeyCode::Tab && self.editor.search.replace_mode {
@@ -851,79 +1156,37 @@ impl App {
 
         if key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT && key.code == KeyCode::Enter
         {
-            if let Err(e) = self
-                .command_registry
-                .execute("search.replace_all", &mut self.editor)
-            {
-                self.editor.status_message = Some(format!("Error: {e}"));
-            } else {
-                self.lsp_notify_did_change();
-                let (path, filename) = self.active_doc_path_info();
-                self.dispatch_plugin_hook(HookEvent::OnBufferChange { path, filename });
-            }
+            self.dispatch_command("search.replace_all");
             return;
         }
 
-        if self.editor.search.replace_focused {
-            if key.code == KeyCode::Backspace {
-                if self.editor.search.replace_cursor_pos > 0 {
-                    let byte_idx = char_to_byte_index(
-                        &self.editor.search.replace_text,
-                        self.editor.search.replace_cursor_pos - 1,
-                    );
-                    self.editor.search.replace_text.remove(byte_idx);
-                    self.editor.search.replace_cursor_pos -= 1;
-                }
-                return;
-            }
+        // Which of the two fields is edited is settled by `replace_focused`,
+        // inside the overlay helpers.
+        if key.code == KeyCode::Backspace {
+            self.overlay_backspace();
+            return;
+        }
 
-            if let KeyCode::Char(c) = key.code {
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    let byte_idx = char_to_byte_index(
-                        &self.editor.search.replace_text,
-                        self.editor.search.replace_cursor_pos,
-                    );
-                    self.editor.search.replace_text.insert(byte_idx, c);
-                    self.editor.search.replace_cursor_pos += 1;
-                }
-            }
-        } else {
-            if key.code == KeyCode::Backspace {
-                if self.editor.search.cursor_pos > 0 {
-                    let byte_idx = char_to_byte_index(
-                        &self.editor.search.query,
-                        self.editor.search.cursor_pos - 1,
-                    );
-                    self.editor.search.query.remove(byte_idx);
-                    self.editor.search.cursor_pos -= 1;
-                    rerun_search(&mut self.editor);
-                }
-                return;
-            }
-
-            if let KeyCode::Char(c) = key.code {
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    let byte_idx = char_to_byte_index(
-                        &self.editor.search.query,
-                        self.editor.search.cursor_pos,
-                    );
-                    self.editor.search.query.insert(byte_idx, c);
-                    self.editor.search.cursor_pos += 1;
-                    rerun_search(&mut self.editor);
-                }
-            }
+        if let Some(c) = Self::typed_char(&key) {
+            self.overlay_insert_char(c);
         }
     }
 
     fn handle_fuzzy_finder_key(&mut self, key: KeyEvent) {
-        if let Some(cmd_id) = self.input_mapper.resolve(EditorMode::FuzzyFinder, key) {
-            match cmd_id {
-                "fuzzy.close" => self.editor.switch_mode(EditorMode::Normal),
-                "fuzzy.up" => self.editor.fuzzy_finder.move_selection(-1),
-                "fuzzy.down" => self.editor.fuzzy_finder.move_selection(1),
-                _ => {}
+        match self.feed_overlay_key(EditorMode::FuzzyFinder, key) {
+            KeyResolution::Pending => return,
+            KeyResolution::Match(cmd_id) => {
+                match cmd_id {
+                    "fuzzy.close" => self.editor.switch_to_default_mode(),
+                    "fuzzy.up" => self.editor.fuzzy_finder.move_selection(-1),
+                    "fuzzy.down" => self.editor.fuzzy_finder.move_selection(1),
+                    // Anything else a keymap binds here still runs, with the
+                    // LSP/plugin notifications `dispatch_command` applies.
+                    other => self.dispatch_command(other),
+                }
+                return;
             }
-            return;
+            KeyResolution::NoMatch => {}
         }
 
         if key.code == KeyCode::Enter {
@@ -931,48 +1194,38 @@ impl App {
                 let full_path = self.editor.file_explorer.root.join(path);
                 self.open_file_from_overlay(&full_path);
             }
-            self.editor.switch_mode(EditorMode::Normal);
+            self.editor.switch_to_default_mode();
             return;
         }
 
         if key.code == KeyCode::Backspace {
-            if self.editor.fuzzy_finder.cursor_pos > 0 {
-                let byte_idx = char_to_byte_index(
-                    &self.editor.fuzzy_finder.query,
-                    self.editor.fuzzy_finder.cursor_pos - 1,
-                );
-                self.editor.fuzzy_finder.query.remove(byte_idx);
-                self.editor.fuzzy_finder.cursor_pos -= 1;
-                self.editor.fuzzy_finder.update_filter();
-            }
+            self.overlay_backspace();
             return;
         }
 
-        if let KeyCode::Char(c) = key.code {
-            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                let byte_idx = char_to_byte_index(
-                    &self.editor.fuzzy_finder.query,
-                    self.editor.fuzzy_finder.cursor_pos,
-                );
-                self.editor.fuzzy_finder.query.insert(byte_idx, c);
-                self.editor.fuzzy_finder.cursor_pos += 1;
-                self.editor.fuzzy_finder.update_filter();
-            }
+        if let Some(c) = Self::typed_char(&key) {
+            self.overlay_insert_char(c);
         }
     }
 
     fn handle_command_palette_key(&mut self, key: KeyEvent) {
-        if let Some(cmd_id) = self.input_mapper.resolve(EditorMode::CommandPalette, key) {
-            match cmd_id {
-                "palette.close" => {
-                    self.editor.command_palette.mode = PaletteMode::Commands;
-                    self.editor.switch_mode(EditorMode::Normal);
+        match self.feed_overlay_key(EditorMode::CommandPalette, key) {
+            KeyResolution::Pending => return,
+            KeyResolution::Match(cmd_id) => {
+                match cmd_id {
+                    "palette.close" => {
+                        self.editor.command_palette.mode = PaletteMode::Commands;
+                        self.editor.switch_to_default_mode();
+                    }
+                    "palette.up" => self.editor.command_palette.move_selection(-1),
+                    "palette.down" => self.editor.command_palette.move_selection(1),
+                    // Anything else a keymap binds here still runs, with the
+                    // LSP/plugin notifications `dispatch_command` applies.
+                    other => self.dispatch_command(other),
                 }
-                "palette.up" => self.editor.command_palette.move_selection(-1),
-                "palette.down" => self.editor.command_palette.move_selection(1),
-                _ => {}
+                return;
             }
-            return;
+            KeyResolution::NoMatch => {}
         }
 
         if key.code == KeyCode::Enter {
@@ -983,12 +1236,8 @@ impl App {
                         .command_palette
                         .selected_command()
                         .map(|c| c.id.clone());
-                    self.editor.switch_mode(EditorMode::Normal);
+                    self.editor.switch_to_default_mode();
                     if let Some(id) = cmd_id {
-                        if id == "theme.list" {
-                            self.open_theme_palette();
-                            return;
-                        }
                         self.dispatch_command(&id);
                     }
                 }
@@ -999,9 +1248,21 @@ impl App {
                         .selected_command()
                         .map(|c| c.id.clone());
                     self.editor.command_palette.mode = PaletteMode::Commands;
-                    self.editor.switch_mode(EditorMode::Normal);
+                    self.editor.switch_to_default_mode();
                     if let Some(name) = theme_name {
                         self.apply_theme(&name);
+                    }
+                }
+                PaletteMode::Keymaps => {
+                    let keymap_name = self
+                        .editor
+                        .command_palette
+                        .selected_command()
+                        .map(|c| c.id.clone());
+                    self.editor.command_palette.mode = PaletteMode::Commands;
+                    self.editor.switch_to_default_mode();
+                    if let Some(name) = keymap_name {
+                        self.apply_keymap(&name);
                     }
                 }
             }
@@ -1009,28 +1270,12 @@ impl App {
         }
 
         if key.code == KeyCode::Backspace {
-            if self.editor.command_palette.cursor_pos > 0 {
-                let byte_idx = char_to_byte_index(
-                    &self.editor.command_palette.query,
-                    self.editor.command_palette.cursor_pos - 1,
-                );
-                self.editor.command_palette.query.remove(byte_idx);
-                self.editor.command_palette.cursor_pos -= 1;
-                self.editor.command_palette.update_filter();
-            }
+            self.overlay_backspace();
             return;
         }
 
-        if let KeyCode::Char(c) = key.code {
-            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                let byte_idx = char_to_byte_index(
-                    &self.editor.command_palette.query,
-                    self.editor.command_palette.cursor_pos,
-                );
-                self.editor.command_palette.query.insert(byte_idx, c);
-                self.editor.command_palette.cursor_pos += 1;
-                self.editor.command_palette.update_filter();
-            }
+        if let Some(c) = Self::typed_char(&key) {
+            self.overlay_insert_char(c);
         }
     }
 
@@ -1064,6 +1309,59 @@ impl App {
         self.editor.command_palette.mode = PaletteMode::Themes;
         self.editor.command_palette.load_commands(themes);
         self.editor.switch_mode(EditorMode::CommandPalette);
+    }
+
+    fn open_keymap_palette(&mut self) {
+        // `BUILTIN_KEYMAP` is not a file, so it can never collide with a preset
+        // name discovered on disk.
+        let mut items = vec![PaletteItem {
+            id: BUILTIN_KEYMAP.to_string(),
+            name: "Built-in (hybrid)".to_string(),
+        }];
+        items.extend(
+            termcode_config::keymap::list_available_keymaps()
+                .into_iter()
+                .map(|name| PaletteItem {
+                    id: name.clone(),
+                    name,
+                }),
+        );
+        self.editor.command_palette.query.clear();
+        self.editor.command_palette.cursor_pos = 0;
+        self.editor.command_palette.mode = PaletteMode::Keymaps;
+        self.editor.command_palette.load_commands(items);
+        self.editor.switch_mode(EditorMode::CommandPalette);
+    }
+
+    /// Switch keymaps for this session. Like theme switching, this does not
+    /// rewrite `config.toml`; `[keymap] preset` still decides what loads at
+    /// startup.
+    fn apply_keymap(&mut self, name: &str) {
+        let preset = if name == BUILTIN_KEYMAP {
+            None
+        } else {
+            match termcode_config::keymap::load_keymap_preset(name) {
+                Some(preset) => Some(preset),
+                None => {
+                    self.editor.status_message = Some(format!("Keymap '{name}' could not be read"));
+                    return;
+                }
+            }
+        };
+        self.input_mapper =
+            build_input_mapper(preset.as_ref(), &self.command_registry, &self.kb_config);
+        self.chord_started = None;
+        self.editor.default_mode = match preset.as_ref() {
+            Some(p) if p.meta.starts_in_insert() => EditorMode::Insert,
+            _ => EditorMode::Normal,
+        };
+        self.editor.switch_to_default_mode();
+        let warnings = preset.as_ref().map(|p| p.warnings()).unwrap_or_default();
+        self.editor.status_message = Some(if warnings.is_empty() {
+            format!("Keymap: {name}")
+        } else {
+            format!("Keymap: {name}  |  {}", warnings.join("  |  "))
+        });
     }
 
     fn apply_theme(&mut self, name: &str) {
@@ -1107,7 +1405,7 @@ impl App {
                 if let Some(idx) = self.editor.tabs.find_by_image_id(image_id) {
                     self.editor.tabs.set_active(idx);
                 }
-                self.editor.active_view = None;
+                self.editor.sync_active_view_to_tab();
             } else if let Err(e) = self.open_image_file(path) {
                 self.editor.status_message = Some(format!("Error: {e}"));
             }
@@ -1130,9 +1428,7 @@ impl App {
             if let Some(idx) = self.editor.tabs.find_by_doc_id(doc_id) {
                 self.editor.tabs.set_active(idx);
             }
-            if let Some(view_id) = self.editor.find_view_by_doc_id(doc_id) {
-                self.editor.active_view = Some(view_id);
-            }
+            self.editor.sync_active_view_to_tab();
         } else if let Err(e) = self.open_file(path) {
             self.editor.status_message = Some(format!("Error: {e}"));
         }
@@ -1175,7 +1471,7 @@ impl App {
             self.editor.active_view = None;
             self.show_sidebar();
         } else {
-            self.sync_active_view_to_tab();
+            self.editor.sync_active_view_to_tab();
         }
     }
 
@@ -1390,22 +1686,6 @@ impl App {
         bridge.notify_did_save(&language, &uri);
     }
 
-    fn sync_active_view_to_tab(&mut self) {
-        use termcode_view::image::TabContent;
-        if let Some(tab) = self.editor.tabs.active_tab() {
-            match tab.content {
-                TabContent::Document(doc_id) => {
-                    if let Some(view_id) = self.editor.find_view_by_doc_id(doc_id) {
-                        self.editor.active_view = Some(view_id);
-                    }
-                }
-                TabContent::Image(_) => {
-                    self.editor.active_view = None;
-                }
-            }
-        }
-    }
-
     fn handle_explorer_enter(&mut self) {
         let selected = self.editor.file_explorer.selected;
         if selected >= self.editor.file_explorer.tree.len() {
@@ -1425,7 +1705,7 @@ impl App {
             FileNodeKind::File | FileNodeKind::Symlink => {
                 let path = self.editor.file_explorer.tree[selected].path.clone();
                 self.open_file_from_overlay(&path);
-                self.editor.switch_mode(EditorMode::Normal);
+                self.editor.switch_to_default_mode();
             }
         }
     }
@@ -1754,11 +2034,32 @@ fn is_document_mutation(cmd_id: &str) -> bool {
             | "edit.newline"
             | "edit.undo"
             | "edit.redo"
+            | "edit.delete_line"
+            | "edit.delete_word_before"
+            | "edit.paste_after"
+            | "edit.paste_before"
+            | "edit.open_below"
+            | "edit.open_above"
             | "clipboard.cut"
             | "clipboard.paste"
             | "search.replace_current"
             | "search.replace_all"
     )
+}
+
+/// Build the input mapper for a keymap preset (or the built-in default) and
+/// layer the user's `keybindings.toml` overrides on top.
+fn build_input_mapper(
+    preset: Option<&termcode_config::keymap::KeymapPreset>,
+    registry: &CommandRegistry,
+    kb_config: &termcode_config::keymap::KeybindingConfig,
+) -> InputMapper {
+    let mut mapper = match preset {
+        Some(preset) => InputMapper::from_preset(preset, registry),
+        None => InputMapper::new(),
+    };
+    mapper.apply_overrides(kb_config, registry);
+    mapper
 }
 
 /// Construct a file:// URI string with percent-encoding.
@@ -1900,4 +2201,155 @@ fn restore_terminal(
     }
     terminal.show_cursor()?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termcode_config::config::AppConfig;
+
+    struct TestFile(PathBuf);
+
+    impl Drop for TestFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// An app whose Insert mode carries a `j k` chord, mirroring the binding
+    /// `config/keybindings.toml` advertises.
+    fn app_with_insert_chord(name: &str) -> (App, TestFile) {
+        let path = std::env::temp_dir().join(format!("termcode-app-test-{name}.txt"));
+        std::fs::write(&path, "abc\n").unwrap();
+
+        let mut app = App::with_config(None, AppConfig::default());
+        app.open_file(&path).unwrap();
+
+        let overrides: termcode_config::keymap::KeybindingConfig = toml::from_str(
+            r#"
+[mode.insert]
+"j k" = "mode.normal"
+"#,
+        )
+        .unwrap();
+        app.input_mapper
+            .apply_overrides(&overrides, &app.command_registry);
+        app.editor.switch_mode(EditorMode::Insert);
+        (app, TestFile(path))
+    }
+
+    fn press(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn code(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_key(press(c));
+        }
+    }
+
+    fn text(app: &App) -> String {
+        app.editor
+            .active_document()
+            .unwrap()
+            .buffer
+            .text()
+            .to_string()
+    }
+
+    #[test]
+    fn insert_chord_completes_when_both_keys_arrive() {
+        let (mut app, _f) = app_with_insert_chord("chord_ok");
+        app.handle_key(press('j'));
+        app.handle_key(press('k'));
+        assert_eq!(app.editor.mode, EditorMode::Normal);
+        assert_eq!(text(&app), "abc\n");
+    }
+
+    #[test]
+    fn insert_dead_chord_types_its_prefix_and_the_terminating_char() {
+        let (mut app, _f) = app_with_insert_chord("chord_dead");
+        app.handle_key(press('j'));
+        app.handle_key(press('x'));
+        assert_eq!(text(&app), "jxabc\n");
+        assert_eq!(app.editor.mode, EditorMode::Insert);
+    }
+
+    /// The terminating key carries no text, so it must still get to run its own
+    /// binding rather than being consumed with the dead chord.
+    #[test]
+    fn insert_dead_chord_still_honours_esc() {
+        let (mut app, _f) = app_with_insert_chord("chord_esc");
+        app.handle_key(press('j'));
+        app.handle_key(code(KeyCode::Esc));
+        assert_eq!(text(&app), "jabc\n");
+        assert_eq!(app.editor.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn insert_dead_chord_still_honours_enter() {
+        let (mut app, _f) = app_with_insert_chord("chord_enter");
+        app.handle_key(press('j'));
+        app.handle_key(code(KeyCode::Enter));
+        assert_eq!(text(&app), "j\nabc\n");
+        assert_eq!(app.editor.mode, EditorMode::Insert);
+    }
+
+    #[test]
+    fn insert_dead_chord_still_honours_backspace() {
+        let (mut app, _f) = app_with_insert_chord("chord_bs");
+        app.handle_key(press('j'));
+        app.handle_key(code(KeyCode::Backspace));
+        // `j` is typed, then Backspace removes it again.
+        assert_eq!(text(&app), "abc\n");
+        assert_eq!(app.editor.mode, EditorMode::Insert);
+    }
+
+    #[test]
+    fn typing_and_backspace_edit_the_focused_overlay_input() {
+        let (mut app, _f) = app_with_insert_chord("overlay_query");
+        app.editor.switch_mode(EditorMode::FuzzyFinder);
+        type_str(&mut app, "abc");
+        app.handle_key(code(KeyCode::Backspace));
+        assert_eq!(app.editor.fuzzy_finder.query, "ab");
+        assert_eq!(app.editor.fuzzy_finder.cursor_pos, 2);
+    }
+
+    /// The search overlay has two inputs. Both typing and deleting must follow
+    /// the focused one, and leave the other alone.
+    #[test]
+    fn search_backspace_follows_the_focused_field() {
+        let (mut app, _f) = app_with_insert_chord("overlay_replace");
+        app.editor.switch_mode(EditorMode::Search);
+        type_str(&mut app, "ab");
+
+        app.editor.search.replace_mode = true;
+        app.editor.search.replace_focused = true;
+        type_str(&mut app, "xy");
+        app.handle_key(code(KeyCode::Backspace));
+
+        assert_eq!(app.editor.search.replace_text, "x");
+        assert_eq!(app.editor.search.query, "ab");
+    }
+
+    /// A chord in progress must not survive a dialog or a quit prompt.
+    #[test]
+    fn confirm_dialog_abandons_a_pending_chord() {
+        let (mut app, _f) = app_with_insert_chord("chord_dialog");
+        app.handle_key(press('j'));
+        assert!(app.input_mapper.has_pending());
+
+        app.editor.confirm_dialog = Some(termcode_view::confirm::ConfirmDialog::new(
+            termcode_view::confirm::ConfirmAction::CloseTab(termcode_view::document::DocumentId(0)),
+            "Save?".to_string(),
+            vec!["Save".to_string(), "Discard".to_string()],
+        ));
+        app.handle_key(code(KeyCode::Esc));
+
+        assert!(!app.input_mapper.has_pending());
+        assert_eq!(text(&app), "abc\n");
+    }
 }

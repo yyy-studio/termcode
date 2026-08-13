@@ -1,3 +1,11 @@
+//! The command registry and every handler that needs nothing beyond an
+//! [`Editor`].
+//!
+//! Two groups live in their own files because they grew large enough to bury
+//! the rest: [`motion`] (word motions) and [`line_edit`] (line-oriented
+//! editing). Commands whose behaviour needs `App` are registered here as noops
+//! and intercepted before dispatch; see [`register_app_level_commands`].
+
 use std::collections::HashMap;
 
 use termcode_core::config_types::LineNumberStyle;
@@ -7,6 +15,11 @@ use termcode_view::editor::{Editor, EditorMode};
 
 use crate::display_width::char_index_to_display_col;
 use crate::ui::editor_view::line_number_width_styled;
+
+mod line_edit;
+mod motion;
+#[cfg(test)]
+mod test_support;
 
 pub type CommandId = &'static str;
 pub type CommandHandler = fn(&mut Editor) -> anyhow::Result<()>;
@@ -19,16 +32,26 @@ pub struct CommandEntry {
 
 pub struct CommandRegistry {
     commands: HashMap<CommandId, CommandEntry>,
+    /// Commands that exist so keymaps can bind them, but that make no sense as
+    /// command-palette entries (overlay navigation, file-explorer motions).
+    hidden: std::collections::HashSet<CommandId>,
 }
 
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),
+            hidden: std::collections::HashSet::new(),
         }
     }
 
     pub fn register(&mut self, entry: CommandEntry) {
+        self.commands.insert(entry.id, entry);
+    }
+
+    /// Register a command that is bindable but omitted from the command palette.
+    pub fn register_hidden(&mut self, entry: CommandEntry) {
+        self.hidden.insert(entry.id);
         self.commands.insert(entry.id, entry);
     }
 
@@ -59,7 +82,12 @@ impl CommandRegistry {
     }
 
     pub fn list_commands(&self) -> Vec<(&str, &str)> {
-        let mut cmds: Vec<(&str, &str)> = self.commands.values().map(|e| (e.id, e.name)).collect();
+        let mut cmds: Vec<(&str, &str)> = self
+            .commands
+            .values()
+            .filter(|e| !self.hidden.contains(e.id))
+            .map(|e| (e.id, e.name))
+            .collect();
         cmds.sort_by_key(|(_, name)| *name);
         cmds
     }
@@ -285,6 +313,12 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
     });
 
     registry.register(CommandEntry {
+        id: "keymap.list",
+        name: "Select Keymap",
+        handler: cmd_noop,
+    });
+
+    registry.register(CommandEntry {
         id: "line_numbers.toggle",
         name: "Toggle Line Numbers",
         handler: cmd_line_numbers_toggle,
@@ -294,6 +328,50 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
         id: "help.toggle",
         name: "Toggle Help",
         handler: cmd_help_toggle,
+    });
+
+    motion::register_motion_commands(registry);
+    line_edit::register_line_edit_commands(registry);
+    register_app_level_commands(registry);
+}
+
+/// Commands whose behaviour lives in `App` rather than in a handler here.
+///
+/// They are registered as noops purely so keymap presets and user overrides can
+/// bind them: `InputMapper` validates every binding against this registry, and
+/// an unregistered id is silently dropped. `App::handle_key` / `dispatch_command`
+/// intercept these ids before the noop handler would ever run.
+fn register_app_level_commands(registry: &mut CommandRegistry) {
+    const HIDDEN: &[(&str, &str)] = &[
+        ("explorer.down", "Explorer: Down"),
+        ("explorer.up", "Explorer: Up"),
+        ("explorer.enter", "Explorer: Open"),
+        ("explorer.expand", "Explorer: Expand"),
+        ("explorer.collapse", "Explorer: Collapse"),
+        ("explorer.refresh", "Explorer: Refresh Node"),
+        ("explorer.refresh_all", "Explorer: Refresh All"),
+        ("fuzzy.up", "Finder: Previous Item"),
+        ("fuzzy.down", "Finder: Next Item"),
+        ("palette.up", "Palette: Previous Item"),
+        ("palette.down", "Palette: Next Item"),
+    ];
+    for (id, name) in HIDDEN {
+        registry.register_hidden(CommandEntry {
+            id,
+            name,
+            handler: cmd_noop,
+        });
+    }
+
+    registry.register(CommandEntry {
+        id: "tab.close",
+        name: "Close Tab",
+        handler: cmd_noop,
+    });
+    registry.register(CommandEntry {
+        id: "app.quit",
+        name: "Quit",
+        handler: cmd_noop,
     });
 }
 
@@ -641,43 +719,21 @@ fn cmd_mode_insert(editor: &mut Editor) -> anyhow::Result<()> {
 }
 
 fn cmd_mode_normal(editor: &mut Editor) -> anyhow::Result<()> {
-    editor.switch_mode(EditorMode::Normal);
+    // Resolves to Insert under a non-modal keymap, where "leave the overlay /
+    // stop editing" should still land the user in the buffer.
+    editor.switch_to_default_mode();
     Ok(())
 }
 
 fn cmd_tab_next(editor: &mut Editor) -> anyhow::Result<()> {
-    use termcode_view::image::TabContent;
     editor.tabs.next();
-    if let Some(tab) = editor.tabs.active_tab() {
-        match tab.content {
-            TabContent::Document(doc_id) => {
-                if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
-                    editor.active_view = Some(view_id);
-                }
-            }
-            TabContent::Image(_) => {
-                editor.active_view = None;
-            }
-        }
-    }
+    editor.sync_active_view_to_tab();
     Ok(())
 }
 
 fn cmd_tab_prev(editor: &mut Editor) -> anyhow::Result<()> {
-    use termcode_view::image::TabContent;
     editor.tabs.prev();
-    if let Some(tab) = editor.tabs.active_tab() {
-        match tab.content {
-            TabContent::Document(doc_id) => {
-                if let Some(view_id) = editor.find_view_by_doc_id(doc_id) {
-                    editor.active_view = Some(view_id);
-                }
-            }
-            TabContent::Image(_) => {
-                editor.active_view = None;
-            }
-        }
-    }
+    editor.sync_active_view_to_tab();
     Ok(())
 }
 
@@ -685,7 +741,7 @@ fn cmd_toggle_sidebar(editor: &mut Editor) -> anyhow::Result<()> {
     if editor.file_explorer.visible {
         if editor.mode == EditorMode::FileExplorer {
             editor.toggle_sidebar();
-            editor.switch_mode(EditorMode::Normal);
+            editor.switch_to_default_mode();
         } else {
             editor.switch_mode(EditorMode::FileExplorer);
         }
@@ -904,7 +960,7 @@ fn cmd_search_replace_all(editor: &mut Editor) -> anyhow::Result<()> {
 fn cmd_search_close(editor: &mut Editor) -> anyhow::Result<()> {
     editor.search.matches.clear();
     editor.search.current_match = None;
-    editor.switch_mode(EditorMode::Normal);
+    editor.switch_to_default_mode();
     Ok(())
 }
 
@@ -922,20 +978,20 @@ fn cmd_fuzzy_open(editor: &mut Editor) -> anyhow::Result<()> {
 }
 
 fn cmd_fuzzy_close(editor: &mut Editor) -> anyhow::Result<()> {
-    editor.switch_mode(EditorMode::Normal);
+    editor.switch_to_default_mode();
     Ok(())
 }
 
-fn cmd_palette_open(editor: &mut Editor) -> anyhow::Result<()> {
-    editor.command_palette.query.clear();
-    editor.command_palette.cursor_pos = 0;
-    editor.command_palette.update_filter();
-    editor.switch_mode(EditorMode::CommandPalette);
+/// `App::dispatch_command` always intercepts `palette.open` and calls
+/// `App::open_command_palette`, which is the only place that can populate the
+/// command list. This handler exists so the id is registered and bindable; it
+/// must stay a noop rather than opening an empty palette.
+fn cmd_palette_open(_editor: &mut Editor) -> anyhow::Result<()> {
     Ok(())
 }
 
 fn cmd_palette_close(editor: &mut Editor) -> anyhow::Result<()> {
-    editor.switch_mode(EditorMode::Normal);
+    editor.switch_to_default_mode();
     Ok(())
 }
 
@@ -1078,5 +1134,28 @@ fn clamp_cursor_column_right(editor: &mut Editor) {
         if view.cursor.column > max_col {
             view.cursor.column = max_col;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_commands_are_excluded_from_the_palette() {
+        let mut registry = CommandRegistry::new();
+        register_builtin_commands(&mut registry);
+        let ids: Vec<&str> = registry
+            .list_commands()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(!ids.contains(&"explorer.down"));
+        assert!(!ids.contains(&"palette.up"));
+        // Still bindable even though hidden.
+        assert!(registry.get_by_string("explorer.down").is_some());
+        // Visible commands are unaffected.
+        assert!(ids.contains(&"file.save"));
+        assert!(ids.contains(&"tab.close"));
     }
 }

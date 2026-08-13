@@ -1,0 +1,116 @@
+[meta]
+name = "vscode"
+description = "VS Code-style shortcuts. Always in Insert mode; no modal layer."
+# No modal layer: the editor opens ready to type, and closing an overlay returns
+# here rather than to Normal mode.
+initial_mode = "insert"
+
+# A preset defines the whole keymap: anything omitted here is unbound.
+#
+# Terminal caveats, and how this preset works around them:
+#   - Ctrl+Shift+P is indistinguishable from Ctrl+P in a terminal that does not
+#     negotiate the kitty keyboard protocol, so the command palette is on F1
+#     and Alt+X instead.
+#   - Ctrl+B is tmux's default prefix. The sidebar is also on Alt+B so the
+#     preset stays usable inside tmux.
+#   - Ctrl+Z is the shell's suspend key, so undo is on Ctrl+U as well.
+
+[global]
+"ctrl+s" = "file.save"
+"ctrl+w" = "tab.close"
+"ctrl+b" = "view.toggle_sidebar"
+"alt+b" = "view.toggle_sidebar"
+"ctrl+p" = "fuzzy.open"
+"f1" = "palette.open"
+"alt+x" = "palette.open"
+"ctrl+f" = "search.open"
+"ctrl+h" = "search.open_replace"
+"f3" = "search.next"
+"shift+f3" = "search.prev"
+"ctrl+g" = "search.next"
+# Stands in for VS Code's Ctrl+Shift+K, which a terminal cannot tell apart from
+# Ctrl+K. Note this deletes the whole line, unlike readline's kill-to-end-of-line.
+"ctrl+k" = "edit.delete_line"
+"ctrl+z" = "edit.undo"
+"ctrl+u" = "edit.undo"
+"ctrl+y" = "edit.redo"
+"ctrl+c" = "clipboard.copy"
+"ctrl+x" = "clipboard.cut"
+"ctrl+v" = "clipboard.paste"
+"alt+right" = "tab.next"
+"alt+left" = "tab.prev"
+"f12" = "goto.definition"
+"alt+f12" = "lsp.hover"
+"f8" = "diagnostic.next"
+"shift+f8" = "diagnostic.prev"
+"ctrl+l" = "line_numbers.toggle"
+"alt+h" = "help.toggle"
+
+# VS Code has no Normal mode. These entries only matter if something drops the
+# editor out of Insert mode; they mirror the Insert bindings so nothing breaks.
+[mode.normal]
+"i" = "mode.insert"
+"up" = "cursor.up"
+"down" = "cursor.down"
+"left" = "cursor.left"
+"right" = "cursor.right"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+"pageup" = "cursor.page_up"
+"pagedown" = "cursor.page_down"
+"delete" = "edit.delete_char"
+
+[mode.insert]
+# `mode.normal` resolves to the resting mode, which is Insert here, so Esc is a
+# no-op rather than a trapdoor into a keymap with nothing bound.
+"esc" = "mode.normal"
+"backspace" = "edit.backspace"
+"delete" = "edit.delete_char"
+"enter" = "edit.newline"
+"up" = "cursor.up"
+"down" = "cursor.down"
+"left" = "cursor.left"
+"right" = "cursor.right"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+"pageup" = "cursor.page_up"
+"pagedown" = "cursor.page_down"
+"ctrl+left" = "cursor.word_prev"
+"ctrl+right" = "cursor.word_next"
+"ctrl+home" = "cursor.home"
+"ctrl+end" = "cursor.end"
+# Readline habits that a terminal user expects to keep working while typing.
+"ctrl+a" = "cursor.line_start"
+"ctrl+e" = "cursor.line_end"
+
+[mode.file_explorer]
+"up" = "explorer.up"
+"down" = "explorer.down"
+"enter" = "explorer.enter"
+"right" = "explorer.expand"
+"left" = "explorer.collapse"
+"f5" = "explorer.refresh"
+"shift+f5" = "explorer.refresh_all"
+"esc" = "mode.normal"
+"tab" = "mode.normal"
+
+[mode.search]
+"esc" = "search.close"
+"enter" = "search.next"
+"f3" = "search.next"
+"shift+f3" = "search.prev"
+"alt+enter" = "search.replace_all"
+
+[mode.fuzzy_finder]
+"esc" = "fuzzy.close"
+"up" = "fuzzy.up"
+"down" = "fuzzy.down"
+"ctrl+p" = "fuzzy.up"
+"ctrl+n" = "fuzzy.down"
+
+[mode.command_palette]
+"esc" = "palette.close"
+"up" = "palette.up"
+"down" = "palette.down"
+"ctrl+p" = "palette.up"
+"ctrl+n" = "palette.down"

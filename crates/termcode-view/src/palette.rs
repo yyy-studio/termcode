@@ -10,6 +10,7 @@ pub struct PaletteItem {
 pub enum PaletteMode {
     Commands,
     Themes,
+    Keymaps,
 }
 
 #[derive(Debug)]

@@ -59,7 +59,7 @@ main() {
         printf '    - %s\n' "$BINARY"
     fi
     if [ -d "${CONFIG_DIR}/runtime" ]; then
-        printf '    - %s (runtime: themes, plugins, queries)\n' "${CONFIG_DIR}/runtime"
+        printf '    - %s (runtime: themes, keymaps, plugins, queries)\n' "${CONFIG_DIR}/runtime"
     fi
     printf '\n'
 
@@ -81,7 +81,7 @@ main() {
     fi
 
     # Ask about user config
-    if [ -f "${CONFIG_DIR}/config.toml" ] || [ -d "${CONFIG_DIR}/themes" ] || [ -d "${CONFIG_DIR}/plugins" ]; then
+    if [ -f "${CONFIG_DIR}/config.toml" ] || [ -d "${CONFIG_DIR}/themes" ] || [ -d "${CONFIG_DIR}/keymaps" ] || [ -d "${CONFIG_DIR}/plugins" ]; then
         printf '\n'
         info "User config found:"
         if [ -f "${CONFIG_DIR}/config.toml" ]; then
@@ -89,6 +89,9 @@ main() {
         fi
         if [ -d "${CONFIG_DIR}/themes" ]; then
             printf '    - %s\n' "${CONFIG_DIR}/themes/"
+        fi
+        if [ -d "${CONFIG_DIR}/keymaps" ]; then
+            printf '    - %s\n' "${CONFIG_DIR}/keymaps/"
         fi
         if [ -d "${CONFIG_DIR}/plugins" ]; then
             printf '    - %s\n' "${CONFIG_DIR}/plugins/"

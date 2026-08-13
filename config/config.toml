@@ -1,5 +1,16 @@
 theme = "one-dark"
 
+[keymap]
+# Replace the whole keymap with a preset from runtime/keymaps/.
+# Available: "vscode", "vim", "helix". Omit (or comment out) to keep the
+# built-in hybrid keymap. keybindings.toml overrides apply on top of the preset.
+# preset = "vim"
+#
+# How long to wait for the *next* key of an incomplete multi-key sequence
+# (e.g. after the "g" of "gg"). The clock restarts on every key, so this is the
+# gap between keys rather than a budget for the whole sequence.
+chord_timeout_ms = 1000
+
 [editor]
 tab_size = 4
 insert_spaces = true
