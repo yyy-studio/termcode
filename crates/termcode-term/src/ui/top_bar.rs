@@ -36,12 +36,10 @@ impl Widget for TopBarWidget<'_> {
 
         // Left: app name
         let left_text = " termcode";
-        let mut x_offset = area.x;
-        for ch in left_text.chars() {
+        for (x_offset, ch) in (area.x..).zip(left_text.chars()) {
             if x_offset < area.x + area.width {
                 buf[(x_offset, area.y)].set_char(ch).set_style(style);
             }
-            x_offset += 1;
         }
 
         // Right: Help button

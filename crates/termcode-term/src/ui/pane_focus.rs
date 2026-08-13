@@ -40,13 +40,11 @@ impl Widget for PaneTitleWidget<'_> {
         }
 
         let title = " EXPLORER";
-        let mut x = area.x;
-        for ch in title.chars() {
+        for (x, ch) in (area.x..).zip(title.chars()) {
             if x >= area.x + area.width {
                 break;
             }
             buf[(x, area.y)].set_char(ch).set_style(style);
-            x += 1;
         }
     }
 }

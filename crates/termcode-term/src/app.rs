@@ -1279,10 +1279,8 @@ impl App {
                             }
                         }
                     }
-                    1 => {
-                        if self.editor.documents.contains_key(&doc_id) {
-                            self.close_tab_for_doc(doc_id);
-                        }
+                    1 if self.editor.documents.contains_key(&doc_id) => {
+                        self.close_tab_for_doc(doc_id);
                     }
                     _ => {
                         // Cancel -- dialog already dismissed via .take()
