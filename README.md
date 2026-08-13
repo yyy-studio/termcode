@@ -68,21 +68,21 @@ cargo install --path .
 
 ### Editor
 
-| Feature                 | Details                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| **Modal editing**       | 6 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette |
-| **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, TOML, JSON, Markdown   |
-| **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics             |
-| **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring                              |
-| **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all           |
-| **Command palette**     | `Ctrl+Shift+P` -- searchable command list with theme switcher                 |
-| **Multi-tab**           | Open multiple files, navigate with `Alt+Left/Right`, close with `Ctrl+W`      |
-| **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes             |
-| **File explorer**       | `Ctrl+B` -- tree view sidebar with `.gitignore` awareness                     |
-| **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF              |
-| **Lua plugins**         | Custom commands, editor API, hook system                                      |
-| **Undo/Redo**           | Branching history with full transaction support                               |
-| **Mouse support**       | Click, drag select, scroll wheel, tab/sidebar click                           |
+| Feature                 | Details                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| **Modal editing**       | 6 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette                |
+| **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, HTML, CSS, Bash, TOML, JSON, Markdown |
+| **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics                            |
+| **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring                                             |
+| **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all                          |
+| **Command palette**     | `Ctrl+Shift+P` -- searchable command list with theme switcher                                |
+| **Multi-tab**           | Open multiple files, navigate with `Alt+Left/Right`, close with `Ctrl+W`                     |
+| **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes                            |
+| **File explorer**       | `Ctrl+B` -- tree view sidebar with `.gitignore` awareness                                    |
+| **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF                             |
+| **Lua plugins**         | Custom commands, editor API, hook system                                                     |
+| **Undo/Redo**           | Branching history with full transaction support                                              |
+| **Mouse support**       | Click, drag select, scroll wheel, tab/sidebar click                                          |
 
 ### Under the Hood
 

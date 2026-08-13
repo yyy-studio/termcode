@@ -5,7 +5,7 @@ use ropey::Rope;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::language::LanguageConfig;
+use crate::language::{InjectionConfigs, LanguageConfig};
 
 /// Known highlight scope names matching theme scopes.
 /// The index of each name is the `Highlight.0` value returned by tree-sitter-highlight.
@@ -56,8 +56,36 @@ pub struct SyntaxHighlighter {
     parser: Parser,
     tree: Option<Tree>,
     highlight_config: Arc<HighlightConfiguration>,
+    /// Highlight configs for languages injected into this one (may be empty).
+    injections: InjectionConfigs,
     /// Cached per-line highlight spans, invalidated on parse/update.
     cached_spans: Vec<Vec<HighlightSpan>>,
+}
+
+/// Build a configured `HighlightConfiguration` for a language.
+/// Returns `None` if the language has no grammar, no highlight query,
+/// or if either query fails to compile.
+pub(crate) fn build_highlight_config(config: &LanguageConfig) -> Option<HighlightConfiguration> {
+    let grammar = config.grammar.clone()?;
+    if config.highlight_query.is_empty() {
+        return None;
+    }
+
+    let mut hl_config = match HighlightConfiguration::new(
+        grammar,
+        &config.name,
+        &config.highlight_query,
+        &config.injection_query,
+        "",
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to create highlight config for {}: {}", config.id, e);
+            return None;
+        }
+    };
+    hl_config.configure(HIGHLIGHT_NAMES);
+    Some(hl_config)
 }
 
 impl SyntaxHighlighter {
@@ -65,24 +93,7 @@ impl SyntaxHighlighter {
     /// Returns `None` if the language has no grammar or no highlight query.
     pub fn new(config: &LanguageConfig) -> Option<Self> {
         let grammar = config.grammar.clone()?;
-        if config.highlight_query.is_empty() {
-            return None;
-        }
-
-        let mut hl_config = match HighlightConfiguration::new(
-            grammar.clone(),
-            &config.name,
-            &config.highlight_query,
-            "",
-            "",
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("Failed to create highlight config for {}: {}", config.id, e);
-                return None;
-            }
-        };
-        hl_config.configure(HIGHLIGHT_NAMES);
+        let hl_config = build_highlight_config(config)?;
 
         let mut parser = Parser::new();
         if parser.set_language(&grammar).is_err() {
@@ -94,6 +105,7 @@ impl SyntaxHighlighter {
             parser,
             tree: None,
             highlight_config: Arc::new(hl_config),
+            injections: config.injections.clone(),
             cached_spans: Vec::new(),
         })
     }
@@ -139,8 +151,11 @@ impl SyntaxHighlighter {
 
         let mut highlighter = Highlighter::new();
         let config = &self.highlight_config;
+        let injections = &self.injections;
 
-        let events = match highlighter.highlight(config, source_bytes, None, |_| None) {
+        let events = match highlighter.highlight(config, source_bytes, None, |lang| {
+            injections.get(lang).map(|c| c.as_ref())
+        }) {
             Ok(events) => events,
             Err(_) => {
                 self.cached_spans = result;
@@ -303,6 +318,8 @@ mod tests {
             file_extensions: vec!["rs".to_string()],
             highlight_query: include_str!("../../../runtime/queries/rust/highlights.scm")
                 .to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
             grammar: Some(tree_sitter_rust::LANGUAGE.into()),
         }
     }
@@ -373,6 +390,114 @@ mod tests {
         );
     }
 
+    fn injected_config(
+        id: &str,
+        name: &str,
+        query: &str,
+        grammar: tree_sitter::Language,
+    ) -> Arc<HighlightConfiguration> {
+        let config = LanguageConfig {
+            id: Arc::from(id),
+            name: name.to_string(),
+            file_extensions: vec![],
+            highlight_query: query.to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
+            grammar: Some(grammar),
+        };
+        Arc::new(build_highlight_config(&config).expect("injected config should build"))
+    }
+
+    fn html_config() -> LanguageConfig {
+        let injections = std::collections::HashMap::from([
+            (
+                "javascript".to_string(),
+                injected_config(
+                    "javascript",
+                    "JavaScript",
+                    include_str!("../../../runtime/queries/javascript/highlights.scm"),
+                    tree_sitter_javascript::LANGUAGE.into(),
+                ),
+            ),
+            (
+                "css".to_string(),
+                injected_config(
+                    "css",
+                    "CSS",
+                    include_str!("../../../runtime/queries/css/highlights.scm"),
+                    tree_sitter_css::LANGUAGE.into(),
+                ),
+            ),
+        ]);
+
+        LanguageConfig {
+            id: Arc::from("html"),
+            name: "HTML".to_string(),
+            file_extensions: vec!["html".to_string()],
+            highlight_query: include_str!("../../../runtime/queries/html/highlights.scm")
+                .to_string(),
+            injection_query: include_str!("../../../runtime/queries/html/injections.scm")
+                .to_string(),
+            injections: Arc::new(injections),
+            grammar: Some(tree_sitter_html::LANGUAGE.into()),
+        }
+    }
+
+    #[test]
+    fn test_highlight_html_script_injection() {
+        let config = html_config();
+        let mut hl = SyntaxHighlighter::new(&config).unwrap();
+        let source = Rope::from_str("<script>const x = 1;</script>\n");
+        hl.parse(&source);
+        let lines = hl.highlight_lines(&source, 0..1);
+        assert!(
+            lines[0].iter().any(|s| s.scope == "keyword"),
+            "Expected JavaScript keyword span for 'const' inside <script>"
+        );
+        assert!(
+            lines[0].iter().any(|s| s.scope == "constant.numeric"),
+            "Expected JavaScript number span for '1' inside <script>"
+        );
+    }
+
+    #[test]
+    fn test_highlight_html_style_injection() {
+        let config = html_config();
+        let mut hl = SyntaxHighlighter::new(&config).unwrap();
+        let source = Rope::from_str("<style>a { color: red; }</style>\n");
+        hl.parse(&source);
+        let lines = hl.highlight_lines(&source, 0..1);
+        assert!(
+            lines[0].iter().any(|s| s.scope == "variable"),
+            "Expected CSS property span for 'color' inside <style>"
+        );
+        assert!(
+            lines[0].iter().any(|s| s.scope == "tag"),
+            "Expected CSS selector span for 'a' inside <style>"
+        );
+    }
+
+    #[test]
+    fn test_highlight_html_tag_and_attribute() {
+        let config = html_config();
+        let mut hl = SyntaxHighlighter::new(&config).unwrap();
+        let source = Rope::from_str("<div class=\"a\">hi</div>\n");
+        hl.parse(&source);
+        let lines = hl.highlight_lines(&source, 0..1);
+        assert!(
+            lines[0].iter().any(|s| s.scope == "tag"),
+            "Expected tag span for 'div'"
+        );
+        assert!(
+            lines[0].iter().any(|s| s.scope == "attribute"),
+            "Expected attribute span for 'class'"
+        );
+        assert!(
+            lines[0].iter().any(|s| s.scope == "string"),
+            "Expected string span for attribute value"
+        );
+    }
+
     #[test]
     fn test_no_grammar_returns_none() {
         let config = LanguageConfig {
@@ -380,6 +505,8 @@ mod tests {
             name: "Unknown".to_string(),
             file_extensions: vec![],
             highlight_query: String::new(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
             grammar: None,
         };
         assert!(SyntaxHighlighter::new(&config).is_none());
@@ -457,6 +584,8 @@ mod tests {
             file_extensions: vec!["py".to_string()],
             highlight_query: include_str!("../../../runtime/queries/python/highlights.scm")
                 .to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
             grammar: Some(tree_sitter_python::LANGUAGE.into()),
         }
     }
@@ -468,6 +597,8 @@ mod tests {
             file_extensions: vec!["js".to_string()],
             highlight_query: include_str!("../../../runtime/queries/javascript/highlights.scm")
                 .to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
             grammar: Some(tree_sitter_javascript::LANGUAGE.into()),
         }
     }
@@ -510,6 +641,8 @@ mod tests {
                     name: stringify!($name).to_string(),
                     file_extensions: vec![],
                     highlight_query: $query.to_string(),
+                    injection_query: String::new(),
+                    injections: InjectionConfigs::default(),
                     grammar: Some($lang),
                 };
                 let hl = SyntaxHighlighter::new(&config);
@@ -581,6 +714,8 @@ mod tests {
             file_extensions: vec!["md".to_string()],
             highlight_query: include_str!("../../../runtime/queries/markdown/highlights.scm")
                 .to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
             grammar: Some(tree_sitter_md::LANGUAGE.into()),
         };
         let mut hl =
