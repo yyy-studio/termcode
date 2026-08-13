@@ -28,3 +28,6 @@ serde = { workspace = true }
 unicode-width = { workspace = true }
 ratatui-image = { workspace = true }
 image = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

@@ -31,6 +31,7 @@ pub fn render(
     frame: &mut Frame,
     editor: &Editor,
     image_cache: &HashMap<ImageId, Mutex<StatefulProtocol>>,
+    input_mapper: &crate::input::InputMapper,
 ) {
     let area = frame.area();
     let app_layout = layout::compute_layout(
@@ -172,6 +173,9 @@ pub fn render(
         }
     }
 
+    // Read the pending chord straight from the mapper: mirroring it into
+    // `Editor` would go stale on every key path that bypasses the mapper.
+    let pending_keys = input_mapper.pending_display();
     let status_widget = StatusBarWidget::new(
         editor.active_document(),
         editor.active_view(),
@@ -179,12 +183,13 @@ pub fn render(
         editor.status_message.as_deref(),
         editor.mode,
         editor.active_image(),
+        &pending_keys,
     );
     frame.render_widget(status_widget, app_layout.status_bar);
 
     // Help popup overlay (rendered last, on top of everything)
     if editor.help_visible {
-        let help_widget = HelpPopupWidget::new(&editor.theme);
+        let help_widget = HelpPopupWidget::new(&editor.theme, input_mapper, editor.mode);
         frame.render_widget(help_widget, area);
     }
 

@@ -67,6 +67,11 @@ pub struct Editor {
     pub file_explorer: FileExplorer,
     pub tabs: TabManager,
     pub mode: EditorMode,
+    /// Mode the editor rests in when nothing else is going on: the mode it
+    /// starts in, and the one it returns to when an overlay closes. Modal
+    /// keymaps leave this at `Normal`; a non-modal keymap (the VS Code preset)
+    /// sets it to `Insert` so the editor is always ready to type into.
+    pub default_mode: EditorMode,
     pub search: SearchState,
     pub fuzzy_finder: FuzzyFinderState,
     pub command_palette: CommandPaletteState,
@@ -114,6 +119,7 @@ impl Editor {
             file_explorer,
             tabs: TabManager::new(),
             mode: EditorMode::Normal,
+            default_mode: EditorMode::Normal,
             search: SearchState::new(),
             fuzzy_finder: FuzzyFinderState::new(),
             command_palette: CommandPaletteState::new(),
@@ -169,6 +175,46 @@ impl Editor {
 
     pub fn switch_mode(&mut self, mode: EditorMode) {
         self.mode = mode;
+    }
+
+    /// Return to the resting mode (see [`Editor::default_mode`]). Insert is only
+    /// honoured when there is a document to type into.
+    pub fn switch_to_default_mode(&mut self) {
+        self.mode = if self.default_mode == EditorMode::Insert && self.active_view.is_none() {
+            EditorMode::Normal
+        } else {
+            self.default_mode
+        };
+    }
+
+    /// Point `active_view` at whatever the active tab holds, and settle the mode
+    /// to match.
+    ///
+    /// Image tabs have no view, which forces Normal mode under a non-modal
+    /// keymap; without re-settling here, coming back to a document tab would
+    /// leave the editor stuck in a mode that keymap barely binds.
+    pub fn sync_active_view_to_tab(&mut self) {
+        let content = self.tabs.active_tab().map(|tab| tab.content.clone());
+        match content {
+            Some(TabContent::Document(doc_id)) => {
+                if let Some(view_id) = self.find_view_by_doc_id(doc_id) {
+                    self.active_view = Some(view_id);
+                }
+            }
+            Some(TabContent::Image(_)) => self.active_view = None,
+            None => {}
+        }
+        // Only correct a mode the new tab cannot sustain. Re-settling
+        // unconditionally would knock a modal keymap out of Insert on every
+        // tab switch, so the next typed character would run an edit command.
+        match (self.active_view.is_some(), self.mode) {
+            // Nothing to type into.
+            (false, EditorMode::Insert) => self.mode = EditorMode::Normal,
+            // Back on a document: Normal may only be where the viewless state
+            // parked us, so let the resting mode decide again.
+            (true, EditorMode::Normal) => self.switch_to_default_mode(),
+            _ => {}
+        }
     }
 
     pub fn switch_theme(&mut self, theme: Theme) {
@@ -292,5 +338,109 @@ impl Editor {
         let id = ImageId(self.next_image_id);
         self.next_image_id += 1;
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termcode_core::config_types::EditorConfig;
+    use termcode_syntax::language::LanguageRegistry;
+
+    fn editor() -> Editor {
+        Editor::new(
+            Theme::default(),
+            EditorConfig::default(),
+            LanguageRegistry::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn default_mode_is_normal_for_a_modal_keymap() {
+        let mut e = editor();
+        e.switch_mode(EditorMode::FuzzyFinder);
+        e.switch_to_default_mode();
+        assert_eq!(e.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn insert_default_mode_needs_a_view_to_type_into() {
+        let mut e = editor();
+        e.default_mode = EditorMode::Insert;
+        // No document open yet: Insert would leave the editor with no cursor.
+        e.switch_to_default_mode();
+        assert_eq!(e.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn returning_to_a_document_tab_restores_the_insert_resting_mode() {
+        let mut e = editor();
+        e.default_mode = EditorMode::Insert;
+        let path = std::env::temp_dir().join("termcode-tab-mode-test.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        e.open_file(&path).unwrap();
+        e.switch_to_default_mode();
+        assert_eq!(e.mode, EditorMode::Insert);
+
+        // An image tab has no view, so the resting mode degrades to Normal...
+        e.tabs
+            .add("pic.png".to_string(), TabContent::Image(ImageId(0)));
+        e.tabs.set_active(1);
+        e.sync_active_view_to_tab();
+        assert_eq!(e.mode, EditorMode::Normal);
+
+        // ...and must come back when a document tab is active again.
+        e.tabs.set_active(0);
+        e.sync_active_view_to_tab();
+        assert_eq!(e.mode, EditorMode::Insert);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn tab_sync_keeps_a_modal_keymap_in_insert() {
+        // Switching tabs mid-edit must not kick a Vim/Helix user out of Insert;
+        // the next character they type would otherwise run an edit command.
+        let mut e = editor();
+        let a = std::env::temp_dir().join("termcode-tab-modal-a.txt");
+        let b = std::env::temp_dir().join("termcode-tab-modal-b.txt");
+        std::fs::write(&a, "one\n").unwrap();
+        std::fs::write(&b, "two\n").unwrap();
+        e.open_file(&a).unwrap();
+        e.open_file(&b).unwrap();
+        e.switch_mode(EditorMode::Insert);
+
+        e.tabs.set_active(0);
+        e.sync_active_view_to_tab();
+
+        assert_eq!(e.default_mode, EditorMode::Normal);
+        assert_eq!(e.mode, EditorMode::Insert);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn tab_sync_leaves_an_overlay_mode_alone() {
+        let mut e = editor();
+        let path = std::env::temp_dir().join("termcode-tab-overlay-test.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        e.open_file(&path).unwrap();
+        e.switch_mode(EditorMode::FuzzyFinder);
+        e.sync_active_view_to_tab();
+        assert_eq!(e.mode, EditorMode::FuzzyFinder);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn insert_default_mode_applies_once_a_view_exists() {
+        let mut e = editor();
+        e.default_mode = EditorMode::Insert;
+        let path = std::env::temp_dir().join("termcode-default-mode-test.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        e.open_file(&path).unwrap();
+        e.switch_mode(EditorMode::CommandPalette);
+        e.switch_to_default_mode();
+        assert_eq!(e.mode, EditorMode::Insert);
+        let _ = std::fs::remove_file(&path);
     }
 }

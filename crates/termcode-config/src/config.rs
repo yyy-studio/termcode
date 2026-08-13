@@ -64,6 +64,26 @@ impl Default for PluginConfig {
     }
 }
 
+/// Keymap selection and chord behaviour.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct KeymapConfig {
+    /// Name of a preset in `runtime/keymaps/<name>.toml`. `None` keeps the
+    /// built-in hybrid keymap, so existing configs are unaffected.
+    pub preset: Option<String>,
+    /// How long an incomplete multi-key sequence stays pending, in milliseconds.
+    pub chord_timeout_ms: u64,
+}
+
+impl Default for KeymapConfig {
+    fn default() -> Self {
+        Self {
+            preset: None,
+            chord_timeout_ms: 1000,
+        }
+    }
+}
+
 /// Top-level application configuration.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -71,6 +91,8 @@ pub struct AppConfig {
     pub theme: String,
     pub editor: EditorConfig,
     pub ui: UiConfig,
+    #[serde(default)]
+    pub keymap: KeymapConfig,
     #[serde(default)]
     pub lsp: Vec<LspServerConfig>,
     #[serde(default)]
@@ -109,6 +131,7 @@ impl Default for AppConfig {
             theme: "one-dark".to_string(),
             editor: EditorConfig::default(),
             ui: UiConfig::default(),
+            keymap: KeymapConfig::default(),
             lsp: Vec::new(),
             plugins: PluginConfig::default(),
         }

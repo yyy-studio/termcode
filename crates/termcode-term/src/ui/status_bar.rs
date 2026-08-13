@@ -18,6 +18,7 @@ pub struct StatusBarWidget<'a> {
     status_message: Option<&'a str>,
     mode: EditorMode,
     image: Option<&'a ImageEntry>,
+    pending_keys: &'a str,
 }
 
 impl<'a> StatusBarWidget<'a> {
@@ -28,6 +29,7 @@ impl<'a> StatusBarWidget<'a> {
         status_message: Option<&'a str>,
         mode: EditorMode,
         image: Option<&'a ImageEntry>,
+        pending_keys: &'a str,
     ) -> Self {
         Self {
             doc,
@@ -36,6 +38,7 @@ impl<'a> StatusBarWidget<'a> {
             status_message,
             mode,
             image,
+            pending_keys,
         }
     }
 }
@@ -161,6 +164,27 @@ impl Widget for StatusBarWidget<'_> {
                 if x >= area.x && x < area.x + area.width {
                     buf[(x, area.y)].set_char(ch).set_style(style);
                 }
+            }
+        }
+
+        // Pending chord, drawn left of the cursor info so a half-typed sequence
+        // like `g` does not look like an ignored key press.
+        if !self.pending_keys.is_empty() {
+            let hint = format!(" {} ", self.pending_keys);
+            // A keymap may bind non-ASCII keys, so measure in columns rather
+            // than bytes or the hint drifts out of place.
+            let hint_width = crate::display_width::str_display_width(&hint) as u16;
+            let hint_style = Style::default()
+                .fg(self.theme.ui.status_bar_bg.to_ratatui())
+                .bg(self.theme.ui.warning.to_ratatui());
+            let right_edge = (area.x + area.width).saturating_sub(right_text.len() as u16);
+            let hint_start = right_edge.saturating_sub(hint_width + 1);
+            let mut x = hint_start;
+            for ch in hint.chars() {
+                if x >= x_offset && x < right_edge && x < area.x + area.width {
+                    buf[(x, area.y)].set_char(ch).set_style(hint_style);
+                }
+                x += crate::display_width::char_display_width(ch) as u16;
             }
         }
     }

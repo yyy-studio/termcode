@@ -167,6 +167,52 @@ termcode                     # Empty editor
 | `Home` / `End`         | Line start / end      |
 | Arrow keys             | Move cursor           |
 
+### Keymap Presets
+
+The table above describes the built-in keymap, a hybrid of VS Code shortcuts and
+a small modal layer. If you would rather have the keys your usual editor uses,
+pick a preset in `config.toml`:
+
+```toml
+[keymap]
+preset = "vim"   # "vscode" | "vim" | "helix"
+```
+
+| Preset   | Style                                                                                    |
+| -------- | ---------------------------------------------------------------------------------------- |
+| `vscode` | Always in Insert mode, VS Code shortcuts, readline keys (`Ctrl+A`/`Ctrl+E`) while typing |
+| `vim`    | Modal, with real multi-key sequences: `gg`, `dd`, `yy`, `gd`, `]d`, `ZQ`                 |
+| `helix`  | Modal, `Space` leader plus the `g` / `[` / `]` prefixes                                  |
+
+A preset **replaces** the whole keymap rather than layering on top of it, so it
+never inherits a default binding that contradicts it. Your `keybindings.toml`
+overrides still apply on top of the preset.
+
+The `vscode` preset has no modal layer: it opens ready to type, `Esc` does not
+drop you into a mode with nothing bound, and closing an overlay returns you to
+the buffer. A preset opts into that with `[meta] initial_mode = "insert"`.
+
+Presets live in `runtime/keymaps/*.toml`; drop your own into
+`~/.config/termcode/keymaps/` to add one — that directory is searched first, so
+a file there also replaces a shipped preset of the same name.
+
+Switch keymaps for the current session from the command palette
+(**Select Keymap**); `[keymap] preset` still decides what loads at startup.
+
+Two keys are deliberately not preset-controlled:
+
+- `Ctrl+Q` always quits, so a broken keymap can never trap you in the editor.
+- Terminal multiplexers and shells claim some keys before termcode sees them.
+  Each preset documents where it steps around `Ctrl+B` (tmux prefix), `Ctrl+Z`
+  (suspend) and `Ctrl+Shift+P` (indistinguishable from `Ctrl+P` in most
+  terminals).
+
+While a multi-key sequence is half-typed, the pending keys show in the status
+bar. `chord_timeout_ms` (default 1000 ms) is how long the editor waits for the
+next key, measured from the last one. If the sequence is abandoned while you are
+typing — into the buffer, the search box, or the finder — the keys are entered as
+text rather than lost.
+
 All keybindings are customizable via `keybindings.toml`. See [Configuration](#configuration).
 
 ## Configuration

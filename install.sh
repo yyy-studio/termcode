@@ -206,6 +206,7 @@ main() {
     # Install runtime (overwrite built-in, preserve user config)
     mkdir -p "$RUNTIME_DIR"
     cp -r "${tmpdir}/termcode-${target}/runtime/themes"  "$RUNTIME_DIR/"
+    cp -r "${tmpdir}/termcode-${target}/runtime/keymaps" "$RUNTIME_DIR/"
     cp -r "${tmpdir}/termcode-${target}/runtime/plugins" "$RUNTIME_DIR/"
     cp -r "${tmpdir}/termcode-${target}/runtime/queries" "$RUNTIME_DIR/"
     info "Installed runtime to ${RUNTIME_DIR}/"

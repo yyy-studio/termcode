@@ -116,7 +116,7 @@ fn handle_editor_click(editor: &mut Editor, x: u16, y: u16, editor_area: &ratatu
         .unwrap_or(0);
 
     if editor.mode != EditorMode::Insert && editor.mode != EditorMode::Normal {
-        editor.switch_mode(EditorMode::Normal);
+        editor.switch_to_default_mode();
     }
 
     if let Some(view) = editor.active_view_mut() {

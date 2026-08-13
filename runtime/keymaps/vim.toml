@@ -1,0 +1,146 @@
+[meta]
+name = "vim"
+description = "Vim-style modal keymap with multi-key sequences (gg, dd, yy, gd)."
+
+# A preset defines the whole keymap: anything omitted here is unbound.
+#
+# Deliberate departures from Vim, and why:
+#   - Ctrl+Z stays unbound so the terminal's suspend behaviour is not shadowed;
+#     undo is `u` and redo is Ctrl+R, as in Vim.
+#   - Ctrl+B is tmux's default prefix, so it is left alone. Ctrl+F/Ctrl+B page
+#     scrolling is on PageDown/PageUp instead.
+#   - Ctrl+C is unbound here so it keeps whatever meaning the terminal gives it;
+#     use `y` (yank line) and the system clipboard commands instead.
+#   - Operators take no counts or motions: `dd`/`yy` are literal sequences, not
+#     `d` + a motion.
+
+[global]
+"ctrl+s" = "file.save"
+"f1" = "help.toggle"
+
+[mode.normal]
+# Motions
+"h" = "cursor.left"
+"j" = "cursor.down"
+"k" = "cursor.up"
+"l" = "cursor.right"
+"left" = "cursor.left"
+"down" = "cursor.down"
+"up" = "cursor.up"
+"right" = "cursor.right"
+"w" = "cursor.word_next"
+"b" = "cursor.word_prev"
+"e" = "cursor.word_end"
+"0" = "cursor.line_start"
+# Shifted punctuation reaches the app with the Shift flag set on some
+# platforms and without it on others, so both spellings are bound.
+"^" = "cursor.line_first_nonblank"
+"shift+^" = "cursor.line_first_nonblank"
+"$" = "cursor.line_end"
+"shift+$" = "cursor.line_end"
+"g g" = "cursor.home"
+"shift+g" = "cursor.end"
+"ctrl+f" = "cursor.page_down"
+"ctrl+b" = "cursor.page_up"
+"pagedown" = "cursor.page_down"
+"pageup" = "cursor.page_up"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+
+# Entering Insert mode
+"i" = "mode.insert"
+"a" = "mode.insert_after"
+"shift+i" = "mode.insert_line_start"
+"shift+a" = "mode.insert_line_end"
+"o" = "edit.open_below"
+"shift+o" = "edit.open_above"
+
+# Editing
+"x" = "edit.delete_char"
+"delete" = "edit.delete_char"
+"d d" = "edit.delete_line"
+"y y" = "edit.yank_line"
+"p" = "edit.paste_after"
+"shift+p" = "edit.paste_before"
+"u" = "edit.undo"
+"ctrl+r" = "edit.redo"
+
+# Search: `/` opens the prompt, n/N step through matches.
+"/" = "search.open"
+"n" = "search.next"
+"shift+n" = "search.prev"
+":" = "palette.open"
+"shift+:" = "palette.open"
+"?" = "help.toggle"
+"shift+?" = "help.toggle"
+"space p" = "fuzzy.open"
+"space f" = "fuzzy.open"
+
+# LSP, mirroring Vim/LSP-plugin conventions
+"g d" = "goto.definition"
+"shift+k" = "lsp.hover"
+"] d" = "diagnostic.next"
+"[ d" = "diagnostic.prev"
+
+# Windows and buffers. The sidebar keys follow NERDTree/nvim-tree rather than
+# Vim proper, which has no file-tree pane.
+"ctrl+n" = "view.toggle_sidebar"
+"space e" = "view.toggle_sidebar"
+"g t" = "tab.next"
+"g shift+t" = "tab.prev"
+"ctrl+w q" = "tab.close"
+"ctrl+w c" = "tab.close"
+"shift+z shift+q" = "app.quit"
+
+[mode.insert]
+"esc" = "mode.normal"
+"backspace" = "edit.backspace"
+"delete" = "edit.delete_char"
+"enter" = "edit.newline"
+"up" = "cursor.up"
+"down" = "cursor.down"
+"left" = "cursor.left"
+"right" = "cursor.right"
+"home" = "cursor.line_start"
+"end" = "cursor.line_end"
+# Vim's Insert-mode Ctrl+W deletes the word before the cursor. It reaches this
+# table before the global map, so "close tab" cannot fire here by accident.
+"ctrl+w" = "edit.delete_word_before"
+
+[mode.file_explorer]
+"j" = "explorer.down"
+"k" = "explorer.up"
+"down" = "explorer.down"
+"up" = "explorer.up"
+"enter" = "explorer.enter"
+"l" = "explorer.expand"
+"right" = "explorer.expand"
+"h" = "explorer.collapse"
+"left" = "explorer.collapse"
+"r" = "explorer.refresh"
+"shift+r" = "explorer.refresh_all"
+"esc" = "mode.normal"
+"tab" = "mode.normal"
+"q" = "mode.normal"
+
+[mode.search]
+"esc" = "search.close"
+"enter" = "search.next"
+
+[mode.fuzzy_finder]
+"esc" = "fuzzy.close"
+"up" = "fuzzy.up"
+"down" = "fuzzy.down"
+"ctrl+p" = "fuzzy.up"
+"ctrl+n" = "fuzzy.down"
+"ctrl+k" = "fuzzy.up"
+"ctrl+j" = "fuzzy.down"
+
+[mode.command_palette]
+"esc" = "palette.close"
+"up" = "palette.up"
+"down" = "palette.down"
+"ctrl+p" = "palette.up"
+"ctrl+n" = "palette.down"
+"ctrl+k" = "palette.up"
+"ctrl+j" = "palette.down"

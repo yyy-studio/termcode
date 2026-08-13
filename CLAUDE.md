@@ -39,7 +39,7 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 
 **TEA (The Elm Architecture):** All state changes flow through `Event -> Update -> Render`. The main loop in `App::run()` (app.rs) does: initial render, then loop { drain LSP events via `try_recv`, poll crossterm events, update state, render }. Widgets never mutate state during rendering.
 
-**Command Pattern:** Every user action is a named command (`CommandId = &'static str`) registered in `CommandRegistry`. Commands that need `App`-level access (e.g., `palette.open`, `goto.definition`, `lsp.hover`) are registered with a noop handler and intercepted in `App::handle_key()` before dispatch. All other commands receive `&mut Editor` only.
+**Command Pattern:** Every user action is a named command (`CommandId = &'static str`) registered in `CommandRegistry`. Commands that need `App`-level access (e.g., `palette.open`, `goto.definition`, `lsp.hover`, `tab.close`, `app.quit`, `explorer.*`) are registered with a noop handler and intercepted in `App::dispatch_command()` / `App::handle_key()` before dispatch. All other commands receive `&mut Editor` only. Registration is mandatory even for app-level commands: `InputMapper` validates every binding against the registry and silently drops unknown ids. `register_hidden()` keeps a command bindable but out of the command palette (`explorer.*`, `fuzzy.up/down`, `palette.up/down`).
 
 **Rope-only buffer:** All document text is stored as `ropey::Rope`. Position conversion between line/column (`Position`) and byte offsets (used by `Selection`, `Transaction`) goes through `Buffer::pos_to_byte()` / `byte_to_pos()`.
 
@@ -49,10 +49,20 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 
 ```
 User Input → EventHandler (crossterm poll) → AppEvent::Key
-  → InputMapper.resolve(mode, key) → CommandId
+  → App::feed_key → InputMapper.resolve_key(mode, key)
+      → KeyResolution::{Match(CommandId) | Pending | NoMatch}
   → CommandRegistry.execute(id, &mut editor) → Editor state mutation
-  → render(frame, &editor) → Ratatui widgets read Editor state
+  → render(frame, &editor, &image_cache, &input_mapper)
 ```
+
+`Pending` means the key is a prefix of a longer binding; it is consumed and
+`App.chord_started` restarts a timer that `AppEvent::Tick` expires, making
+`chord_timeout_ms` an inter-key gap rather than a whole-sequence budget.
+
+Two ways to end a chord early: `abandon_pending_chord()` drops the keys (mouse
+input, confirm dialog, `Ctrl+Q` — contexts where typing them would be wrong),
+`recover_pending_chord()` enters them as text where they were typed (timeout,
+completion popup stealing a key).
 
 LSP events flow separately:
 
@@ -75,10 +85,11 @@ Six modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `Command
 
 ### Adding a New Command
 
-1. Write handler: `fn cmd_foo(editor: &mut Editor) -> anyhow::Result<()>` in `command.rs`
-2. Register: `registry.register(cmd!("category.foo", "Foo", cmd_foo))` in `register_builtin_commands()`
-3. Bind key: add to `InputMapper::default()` in `input.rs` under the appropriate mode
-4. If the command needs App-level access (LSP, clipboard, quit), intercept it in `App::handle_key()` like `palette.open`
+1. Write handler: `fn cmd_foo(editor: &mut Editor) -> anyhow::Result<()>` in `command.rs` — word motions live in `command/motion.rs`, line-oriented editing in `command/line_edit.rs`
+2. Register: `registry.register(CommandEntry { id: "category.foo", name: "Foo", handler: cmd_foo })` in `register_builtin_commands()`, or `register_hidden()` to keep it bindable but out of the command palette
+3. Bind key: add to `InputMapper::new()` in `input.rs` under the appropriate mode, plus any preset in `runtime/keymaps/` that should carry it
+4. If the command needs App-level access (LSP, clipboard, quit), register it with `cmd_noop` in `register_app_level_commands()` and intercept it in `App::dispatch_command()` like `palette.open`
+5. If it mutates the buffer, add its id to `is_document_mutation()` in `app.rs` so LSP `didChange` and the `OnBufferChange` hook still fire
 
 ### Adding a New Widget
 
@@ -113,6 +124,82 @@ Images open in tabs alongside text documents via `TabContent::Image(ImageId)`. F
 2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides)
 3. Theme is automatically discovered by `list_available_themes()` scanning `runtime/themes/`
 
+### Keymap Presets
+
+`InputMapper` stores bindings as `(Vec<KeyEvent>, CommandId)`, so multi-key
+chords (`gg`, `space f`, `ctrl+k ctrl+p`) are first-class. Resolution rules:
+
+- Mode table is searched **before** the global table, so a preset can reclaim a
+  global shortcut inside one mode (Vim's Insert-mode `Ctrl+W`).
+- Global bindings are **not** consulted in the overlay modes (Search, fuzzy
+  finder, command palette); those keys belong to the overlay's text input.
+- Each table is settled completely (exact match, then prefix) before the next is
+  consulted, so a mode chord is not pre-empted by a same-prefix global binding.
+- An exact match fires immediately, so a binding that is also the prefix of a
+  longer one makes the longer one unreachable _within its table_.
+  `tests/keymap_presets.rs` asserts no shipped preset does this, checking each
+  mode table both alone and unioned with `[global]`.
+- A sequence that turns out to be unbound is discarded, not retried key-by-key
+  — except in Insert mode, where the buffered keys are typed as text so a chord
+  like `j k` cannot swallow a literal `j`. If the key that ended the chord
+  carries no text (`Esc`, `Enter`, ...) it is then re-resolved on its own, since
+  the mapper only ever saw it as the tail of a dead sequence. The overlay
+  handlers and the chord-timeout path recover their keys the same way.
+- The pending chord lives only in `InputMapper`; `render()` reads it via
+  `pending_display()`. Do not mirror it into `Editor` — every key path that
+  bypasses the mapper (mouse, confirm dialog) would desynchronise it.
+
+`Ctrl+Q` and the file-explorer/overlay navigation commands are intercepted in
+`App` rather than run from the registry, so the help popup carries an
+`ALWAYS_AVAILABLE` fallback for `app.quit`.
+
+Keymap presets are searched via `keymap_dirs()`, which puts
+`~/.config/termcode/keymaps/` **before** the runtime directories so a user file
+can replace a shipped preset by name. A file that fails to parse is logged and
+skipped rather than masking a working one further down.
+
+`config.toml`'s `[keymap] preset = "<name>"` loads `runtime/keymaps/<name>.toml`
+and **replaces** the built-in map entirely; `keybindings.toml` overrides then
+apply on top. Both paths go through `build_input_mapper()` in `app.rs`, which is
+called twice: once at startup and again after plugin commands register, so a
+keymap can bind them.
+
+`Ctrl+Q` stays hardcoded in `handle_key()` as an escape hatch that no keymap can
+remove.
+
+### Resting Mode (`Editor::default_mode`)
+
+The editor boots in `EditorMode::Normal`, which makes a keymap with no modal
+layer unusable: nothing would be bound. A preset declares `[meta] initial_mode =
+"insert"` (only `vscode` does) and `App::with_config` sets `editor.default_mode`
+from it.
+
+`Editor::switch_to_default_mode()` is what every "we're done, go back" path
+calls -- `cmd_mode_normal`, overlay close, opening a file from the finder or
+explorer, clicking into the editor. Under a modal keymap `default_mode` is
+`Normal`, so those paths behave exactly as before; under `vscode` they return to
+Insert. Insert is downgraded to Normal when `active_view` is `None`, since there
+is nothing to type into.
+
+The resting mode is settled at the top of `App::run()`, not in `with_config()`:
+callers open startup files between the two, and Insert needs a view to exist.
+
+### Adding a New Keymap Preset
+
+1. Create `runtime/keymaps/my-keymap.toml` with `[meta]`, `[global]`, and
+   `[mode.*]` sections (see `vim.toml`)
+2. Bind every command the preset needs -- there is no inheritance from defaults
+3. Set `[meta] initial_mode = "insert"` if the keymap has no modal layer
+4. Add the name to `PRESETS` in `crates/termcode-term/tests/keymap_presets.rs`
+   so it is checked for unparsable keys, unknown commands, shadowed chords, and
+   unknown sections
+
+Serde ignores what it does not recognise, so a misspelled `[mode.nromal]` would
+bind nothing at all. `KeymapPreset::warnings()` (and `KeybindingConfig::warnings()`
+for `keybindings.toml`) reports those sections plus an unusable
+`meta.initial_mode`; `App` shows them in the status bar at startup and on a live
+keymap switch.
+
 ### Configuration Loading
 
 Config is loaded once at startup in `App::new()`:
@@ -141,11 +228,12 @@ Tree-based with lazy expansion. Uses `ignore::WalkBuilder` for `.gitignore`-awar
 ```
 runtime/
   themes/      # Built-in themes (one-dark, gruvbox-dark, catppuccin-mocha, lazygit)
+  keymaps/     # Keymap presets (vscode, vim, helix)
   plugins/     # Example plugins (each has plugin.toml + init.lua)
   queries/     # Tree-sitter highlight queries per language
 ```
 
-User overrides: `~/.config/termcode/themes/` and `~/.config/termcode/plugins/` are also scanned.
+User overrides: `~/.config/termcode/themes/`, `~/.config/termcode/keymaps/`, and `~/.config/termcode/plugins/` are also scanned.
 
 ## Important Technical Details
 
@@ -156,6 +244,9 @@ User overrides: `~/.config/termcode/themes/` and `~/.config/termcode/plugins/` a
 - LSP `didChange` must be sent after every document mutation (not just typed chars — also backspace, delete, undo, redo, search-replace).
 - `Document.version` must be incremented on every mutation including undo/redo (LSP requires monotonically increasing versions).
 - Atomic file save: write to tempfile, then rename. Implemented in `Buffer::save_to_file()`.
-- `Ctrl+C` is copy-only (no quit behavior). `Ctrl+Q` is the sole quit command.
+- `Ctrl+C` is copy-only (no quit behavior). It is a `global` binding, so like
+  every global it does not apply in the overlay modes (search, fuzzy finder,
+  command palette), where a keymap must bind it per-mode to reach it.
+  `Ctrl+Q` is intercepted before the keymap and is the sole guaranteed quit.
 - Overlay text inputs track `cursor_pos` as character index, converted to byte index via `char_to_byte_index()` before `String::insert()/remove()`.
 - Search `find_matches()` uses case-insensitive literal matching on `&str` (not `&Rope`). Caller converts Rope to String. Matches are non-overlapping. Replace operations apply in reverse byte-offset order.

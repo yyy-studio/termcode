@@ -4,8 +4,23 @@
 # Key combo syntax:
 #   - Modifiers: ctrl, alt, shift (combined with +)
 #   - Keys: a-z, 0-9, enter, esc, backspace, delete, tab, up, down, left, right
-#           pageup, pagedown, home, end, f1-f12
+#           pageup, pagedown, home, end, f1-f12, space
 #   - Examples: "ctrl+s", "ctrl+shift+p", "alt+left", "f12", "enter"
+#
+# Multi-key sequences (chords) are written with spaces between the steps:
+#   "g g" = "cursor.home"          # press g, then g
+#   "space f" = "fuzzy.open"       # leader-style binding
+#   "ctrl+k ctrl+p" = "palette.open"
+# A sequence is unreachable if a shorter binding is also a prefix of it: an
+# exact match fires immediately rather than waiting.
+#
+# In Insert mode a chord that never completes types its keys as text, so a
+# binding like "j k" = "mode.normal" costs a brief pause after each literal `j`
+# (see chord_timeout_ms in config.toml) but never swallows one. The key that
+# ends a dead chord still runs its own binding, so `j` then Esc types the `j`
+# and leaves Insert mode.
+#
+# These overrides layer on top of whatever [keymap] preset config.toml selects.
 #
 # Available command IDs can be found in the command palette (Ctrl+Shift+P).
 # Invalid command names are logged and skipped.
