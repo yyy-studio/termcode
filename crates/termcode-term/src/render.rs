@@ -206,13 +206,26 @@ fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u1
     let line_text: String = doc.buffer.line(view.cursor.line).chars().collect();
     let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
     let display_col =
-        crate::display_width::char_index_to_display_col(line_text, view.cursor.column) as u16;
+        crate::display_width::char_index_to_display_col(line_text, view.cursor.column);
 
-    let cursor_x = app_layout.editor_area.x
-        + gutter_width
-        + 1
-        + display_col.saturating_sub(view.scroll.left_col as u16);
-    let cursor_y =
-        app_layout.editor_area.y + (view.cursor.line.saturating_sub(view.scroll.top_line)) as u16;
+    // Clamp to the code area: long (minified) lines can exceed u16 display columns.
+    let code_width = app_layout
+        .editor_area
+        .width
+        .saturating_sub(gutter_width + 1);
+    if code_width == 0 {
+        return None;
+    }
+    let col_offset = display_col
+        .saturating_sub(view.scroll.left_col)
+        .min(code_width as usize - 1) as u16;
+
+    let row = view.cursor.line.saturating_sub(view.scroll.top_line);
+    if row >= app_layout.editor_area.height as usize {
+        return None;
+    }
+
+    let cursor_x = app_layout.editor_area.x + gutter_width + 1 + col_offset;
+    let cursor_y = app_layout.editor_area.y + row as u16;
     Some((cursor_x, cursor_y))
 }

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, Once};
 
+use crossterm::cursor::Show;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -1816,7 +1818,34 @@ fn list_available_themes() -> Vec<String> {
     themes
 }
 
+/// Restore the terminal from a panic handler and then run the original hook.
+///
+/// The release profile uses `panic = "abort"`, so no unwinding (and therefore no
+/// `Drop`) runs on panic. Without this hook the terminal is left in raw mode with
+/// the alternate screen and mouse capture still active, which floods the shell
+/// with mouse escape sequences and makes it unusable.
+fn install_panic_hook() {
+    static HOOK_INSTALLED: Once = Once::new();
+    HOOK_INSTALLED.call_once(|| {
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let mut stdout = io::stdout();
+            if MOUSE_CAPTURE_ACTIVE.load(Ordering::Relaxed) {
+                let _ = execute!(stdout, DisableMouseCapture);
+            }
+            let _ = execute!(stdout, LeaveAlternateScreen, Show);
+            let _ = disable_raw_mode();
+            original_hook(info);
+        }));
+    });
+}
+
+/// Whether mouse capture is currently active. Read by the panic hook, which
+/// cannot see the config of whichever `setup_terminal` call is live.
+static MOUSE_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 fn setup_terminal(mouse_enabled: bool) -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     let mut entered_alt_screen = false;
@@ -1828,6 +1857,7 @@ fn setup_terminal(mouse_enabled: bool) -> anyhow::Result<Terminal<CrosstermBacke
         if mouse_enabled {
             execute!(stdout, EnableMouseCapture)?;
             mouse_captured = true;
+            MOUSE_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
         }
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
@@ -1838,6 +1868,7 @@ fn setup_terminal(mouse_enabled: bool) -> anyhow::Result<Terminal<CrosstermBacke
         let mut cleanup_stdout = io::stdout();
         if mouse_enabled && mouse_captured {
             let _ = execute!(cleanup_stdout, DisableMouseCapture);
+            MOUSE_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
         }
         if entered_alt_screen {
             let _ = execute!(cleanup_stdout, LeaveAlternateScreen);
@@ -1855,6 +1886,7 @@ fn restore_terminal(
 ) -> anyhow::Result<()> {
     disable_raw_mode()?;
     if mouse_enabled {
+        MOUSE_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
         execute!(
             terminal.backend_mut(),
             DisableMouseCapture,

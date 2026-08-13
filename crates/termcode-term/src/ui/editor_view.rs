@@ -42,6 +42,19 @@ fn blend_color(
     }
 }
 
+/// Display width of `line`, stopping once `cap` columns are reached.
+/// Bounded so minified lines far wider than the viewport are not fully scanned.
+fn display_width_capped(line: &str, cap: usize) -> usize {
+    let mut width = 0usize;
+    for ch in line.chars() {
+        if width >= cap {
+            break;
+        }
+        width += ch.width().unwrap_or(0);
+    }
+    width.min(cap)
+}
+
 impl<'a> EditorViewWidget<'a> {
     pub fn new(
         doc: &'a Document,
@@ -228,33 +241,34 @@ impl Widget for EditorViewWidget<'_> {
             }
 
             let left_col = self.view.scroll.left_col;
-            let mut col = 0u16;
+            // Display columns are tracked as usize: minified files routinely have
+            // lines wider than u16::MAX, which would wrap and index outside the buffer.
+            let visible_end = left_col.saturating_add(code_width as usize);
+            let mut col = 0usize;
             for (byte_idx, ch) in line_text.char_indices() {
+                if col >= visible_end {
+                    break;
+                }
                 if ch == '\t' {
-                    let tab_width = 4 - (col as usize % 4);
+                    let tab_width = 4 - (col % 4);
                     for _ in 0..tab_width {
-                        if col >= left_col as u16 {
-                            let x = code_start + col - left_col as u16;
-                            if x < code_start + code_width {
-                                buf[(x, y)].set_char(' ').set_style(char_styles[byte_idx]);
-                            }
+                        if col >= left_col && col < visible_end {
+                            let x = code_start + (col - left_col) as u16;
+                            buf[(x, y)].set_char(' ').set_style(char_styles[byte_idx]);
                         }
                         col += 1;
                     }
                 } else {
-                    let ch_width = ch.width().unwrap_or(0) as u16;
-                    if ch_width > 0 && col >= left_col as u16 {
-                        let x = code_start + col - left_col as u16;
-                        if x + ch_width <= code_start + code_width {
-                            // Full character fits in the code area
-                            buf[(x, y)].set_char(ch).set_style(char_styles[byte_idx]);
-                            for offset in 1..ch_width {
-                                buf[(x + offset, y)]
-                                    .set_char(' ')
-                                    .set_style(char_styles[byte_idx]);
-                            }
+                    let ch_width = ch.width().unwrap_or(0);
+                    // Render only if the full character fits (no partial wide char)
+                    if ch_width > 0 && col >= left_col && col + ch_width <= visible_end {
+                        let x = code_start + (col - left_col) as u16;
+                        buf[(x, y)].set_char(ch).set_style(char_styles[byte_idx]);
+                        for offset in 1..ch_width as u16 {
+                            buf[(x + offset, y)]
+                                .set_char(' ')
+                                .set_style(char_styles[byte_idx]);
                         }
-                        // If it doesn't fully fit, skip it (don't render partial wide char)
                     }
                     col += ch_width;
                 }
@@ -262,22 +276,20 @@ impl Widget for EditorViewWidget<'_> {
 
             if is_cursor_line && self.is_active {
                 let cursor_display_col =
-                    char_index_to_display_col(line_text, self.view.cursor.column) as u16;
-                if cursor_display_col >= left_col as u16 {
-                    let cursor_x = code_start + cursor_display_col - left_col as u16;
-                    if cursor_x < code_start + code_width {
-                        let cell = &mut buf[(cursor_x, y)];
-                        match self.mode {
-                            EditorMode::Normal
-                            | EditorMode::FileExplorer
-                            | EditorMode::Search
-                            | EditorMode::FuzzyFinder
-                            | EditorMode::CommandPalette => {
-                                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-                            }
-                            EditorMode::Insert => {
-                                cell.set_style(cell.style().add_modifier(Modifier::UNDERLINED));
-                            }
+                    char_index_to_display_col(line_text, self.view.cursor.column);
+                if cursor_display_col >= left_col && cursor_display_col < visible_end {
+                    let cursor_x = code_start + (cursor_display_col - left_col) as u16;
+                    let cell = &mut buf[(cursor_x, y)];
+                    match self.mode {
+                        EditorMode::Normal
+                        | EditorMode::FileExplorer
+                        | EditorMode::Search
+                        | EditorMode::FuzzyFinder
+                        | EditorMode::CommandPalette => {
+                            cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+                        }
+                        EditorMode::Insert => {
+                            cell.set_style(cell.style().add_modifier(Modifier::UNDERLINED));
                         }
                     }
                 }
@@ -294,27 +306,23 @@ impl Widget for EditorViewWidget<'_> {
                     DiagnosticSeverity::Hint => self.theme.ui.hint.to_ratatui(),
                 };
                 let start_col = if diag.range.0.line == line_idx {
-                    char_index_to_display_col(line_text, diag.range.0.column) as u16
+                    char_index_to_display_col(line_text, diag.range.0.column)
                 } else {
                     0
                 };
                 let end_col = if diag.range.1.line == line_idx {
-                    char_index_to_display_col(line_text, diag.range.1.column) as u16
+                    char_index_to_display_col(line_text, diag.range.1.column)
                 } else {
-                    col
+                    display_width_capped(line_text, visible_end)
                 };
-                for c in start_col..end_col {
-                    if c >= left_col as u16 {
-                        let x = code_start + c - left_col as u16;
-                        if x < code_start + code_width {
-                            let cell = &mut buf[(x, y)];
-                            cell.set_style(
-                                cell.style()
-                                    .fg(diag_color)
-                                    .add_modifier(Modifier::UNDERLINED),
-                            );
-                        }
-                    }
+                for c in start_col.max(left_col)..end_col.min(visible_end) {
+                    let x = code_start + (c - left_col) as u16;
+                    let cell = &mut buf[(x, y)];
+                    cell.set_style(
+                        cell.style()
+                            .fg(diag_color)
+                            .add_modifier(Modifier::UNDERLINED),
+                    );
                 }
             }
         }
@@ -326,6 +334,7 @@ impl Widget for EditorViewWidget<'_> {
                 let search_code_start = area.x + gutter_width + 1;
                 let search_code_width = area.width.saturating_sub(gutter_width + 1);
                 let search_left_col = self.view.scroll.left_col;
+                let search_visible_end = search_left_col.saturating_add(search_code_width as usize);
 
                 for i in 0..visible_lines {
                     let line_idx = top_line + i;
@@ -355,21 +364,21 @@ impl Widget for EditorViewWidget<'_> {
                         let bg = if is_active { active_bg } else { match_bg };
 
                         let mut byte_cursor = 0;
-                        let mut display_col = 0u16;
+                        let mut display_col = 0usize;
                         for ch in line_text.chars() {
                             let ch_len = ch.len_utf8();
-                            if byte_cursor >= end_in_line {
+                            if byte_cursor >= end_in_line || display_col >= search_visible_end {
                                 break;
                             }
-                            let ch_width = ch.width().unwrap_or(0) as u16;
-                            if byte_cursor >= start_in_line && display_col >= search_left_col as u16
-                            {
+                            let ch_width = ch.width().unwrap_or(0);
+                            if byte_cursor >= start_in_line && display_col >= search_left_col {
                                 for offset in 0..ch_width {
-                                    let x = search_code_start + display_col + offset
-                                        - search_left_col as u16;
-                                    if x < search_code_start + search_code_width {
-                                        buf[(x, y)].set_bg(bg);
+                                    let c = display_col + offset;
+                                    if c >= search_visible_end {
+                                        break;
                                     }
+                                    let x = search_code_start + (c - search_left_col) as u16;
+                                    buf[(x, y)].set_bg(bg);
                                 }
                             }
                             display_col += ch_width;
@@ -388,6 +397,7 @@ impl Widget for EditorViewWidget<'_> {
             let sel_code_start = area.x + gutter_width + 1;
             let sel_code_width = area.width.saturating_sub(gutter_width + 1);
             let sel_left_col = self.view.scroll.left_col;
+            let sel_visible_end = sel_left_col.saturating_add(sel_code_width as usize);
 
             for i in 0..visible_lines {
                 let line_idx = top_line + i;
@@ -414,19 +424,21 @@ impl Widget for EditorViewWidget<'_> {
                 let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
 
                 let mut byte_cursor = 0;
-                let mut display_col = 0u16;
+                let mut display_col = 0usize;
                 for ch in line_text.chars() {
                     let ch_len = ch.len_utf8();
-                    if byte_cursor >= end_in_line {
+                    if byte_cursor >= end_in_line || display_col >= sel_visible_end {
                         break;
                     }
-                    let ch_width = ch.width().unwrap_or(0) as u16;
-                    if byte_cursor >= start_in_line && display_col >= sel_left_col as u16 {
+                    let ch_width = ch.width().unwrap_or(0);
+                    if byte_cursor >= start_in_line && display_col >= sel_left_col {
                         for offset in 0..ch_width {
-                            let x = sel_code_start + display_col + offset - sel_left_col as u16;
-                            if x < sel_code_start + sel_code_width {
-                                buf[(x, y)].set_bg(sel_bg);
+                            let c = display_col + offset;
+                            if c >= sel_visible_end {
+                                break;
                             }
+                            let x = sel_code_start + (c - sel_left_col) as u16;
+                            buf[(x, y)].set_bg(sel_bg);
                         }
                     }
                     display_col += ch_width;
