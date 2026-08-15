@@ -16,6 +16,18 @@ pub struct KeybindingConfig {
 }
 
 impl KeybindingConfig {
+    /// The overrides table for a section: `None` is `[global]`, otherwise the
+    /// `[mode.<name>]` table of that name.
+    ///
+    /// The settings screen changes a binding without re-reading the file, so it
+    /// needs to reach the same table the file would have populated.
+    pub fn table_mut(&mut self, section: Option<&str>) -> Option<&mut HashMap<String, String>> {
+        match section {
+            None => Some(&mut self.global),
+            Some(mode) => self.modes.table_mut(mode),
+        }
+    }
+
     /// Sections of the override file that this loader does not understand.
     pub fn warnings(&self) -> Vec<String> {
         let mut warnings = self.unknown.describe("");
@@ -104,8 +116,27 @@ pub struct ModeBindings {
     pub search: HashMap<String, String>,
     pub fuzzy_finder: HashMap<String, String>,
     pub command_palette: HashMap<String, String>,
+    pub settings: HashMap<String, String>,
     #[serde(flatten)]
     unknown: UnknownSections,
+}
+
+impl ModeBindings {
+    /// The table a `[mode.<name>]` section maps to. Unknown names get `None`
+    /// rather than a silently created table, matching how the parser treats
+    /// them.
+    pub fn table_mut(&mut self, mode: &str) -> Option<&mut HashMap<String, String>> {
+        match mode {
+            "normal" => Some(&mut self.normal),
+            "insert" => Some(&mut self.insert),
+            "file_explorer" => Some(&mut self.file_explorer),
+            "search" => Some(&mut self.search),
+            "fuzzy_finder" => Some(&mut self.fuzzy_finder),
+            "command_palette" => Some(&mut self.command_palette),
+            "settings" => Some(&mut self.settings),
+            _ => None,
+        }
+    }
 }
 
 /// Keys of a table that matched no field of the struct they were declared in.
@@ -243,6 +274,64 @@ pub fn parse_key_sequence(s: &str) -> Option<Vec<KeyEvent>> {
     if seq.is_empty() { None } else { Some(seq) }
 }
 
+/// Render a key sequence in the spelling [`parse_key_sequence`] accepts, so a
+/// binding captured from a key press can be written to `keybindings.toml` and
+/// read back as the same chord.
+///
+/// This is deliberately not the status-bar formatter: that one is tuned for
+/// reading (`Ctrl+S`, `PgUp`), and two of its spellings do not survive a round
+/// trip through the parser.
+pub fn key_sequence_to_config(seq: &[KeyEvent]) -> Option<String> {
+    if seq.is_empty() {
+        return None;
+    }
+    seq.iter()
+        .map(key_combo_to_config)
+        .collect::<Option<Vec<_>>>()
+        .map(|combos| combos.join(" "))
+}
+
+/// Render one key press. Returns `None` for a key the parser has no spelling
+/// for, so the caller can refuse the binding instead of writing one that will
+/// silently fail to load.
+fn key_combo_to_config(key: &KeyEvent) -> Option<String> {
+    let code = match key.code {
+        KeyCode::Char(' ') => "space".to_string(),
+        // The parser lowercases single characters and re-uppercases them when
+        // SHIFT is set, so emitting the lowercase form always round-trips.
+        KeyCode::Char(c) => c.to_ascii_lowercase().to_string(),
+        KeyCode::F(n) => format!("f{n}"),
+        KeyCode::Enter => "enter".to_string(),
+        KeyCode::Esc => "esc".to_string(),
+        KeyCode::Backspace => "backspace".to_string(),
+        KeyCode::Delete => "delete".to_string(),
+        KeyCode::Tab => "tab".to_string(),
+        KeyCode::BackTab => "backtab".to_string(),
+        KeyCode::Up => "up".to_string(),
+        KeyCode::Down => "down".to_string(),
+        KeyCode::Left => "left".to_string(),
+        KeyCode::Right => "right".to_string(),
+        KeyCode::Home => "home".to_string(),
+        KeyCode::End => "end".to_string(),
+        KeyCode::PageUp => "pageup".to_string(),
+        KeyCode::PageDown => "pagedown".to_string(),
+        _ => return None,
+    };
+
+    let mut out = String::new();
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        out.push_str("ctrl+");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        out.push_str("alt+");
+    }
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        out.push_str("shift+");
+    }
+    out.push_str(&code);
+    Some(out)
+}
+
 /// Parse a key combo string like "ctrl+shift+p" into a crossterm KeyEvent.
 ///
 /// Edge case: a bare "+" string splits into `["", ""]` (two empty parts). Since neither
@@ -294,6 +383,9 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
         "backspace" => Some(KeyCode::Backspace),
         "delete" | "del" => Some(KeyCode::Delete),
         "tab" => Some(KeyCode::Tab),
+        // Terminals report Shift+Tab as its own key code, which `shift+tab`
+        // cannot express: that parses to Tab with a SHIFT modifier instead.
+        "backtab" => Some(KeyCode::BackTab),
         "up" => Some(KeyCode::Up),
         "down" => Some(KeyCode::Down),
         "left" => Some(KeyCode::Left),
@@ -502,6 +594,48 @@ initial_mode = "insrt"
         assert_eq!(
             config.warnings(),
             vec!["unknown section [mode.isnert]".to_string()]
+        );
+    }
+
+    #[test]
+    fn captured_keys_round_trip_through_the_config_spelling() {
+        let ctrl = KeyModifiers::CONTROL;
+        let shift = KeyModifiers::SHIFT;
+        let none = KeyModifiers::NONE;
+        let cases: Vec<Vec<KeyEvent>> = vec![
+            vec![KeyEvent::new(KeyCode::Char('s'), ctrl)],
+            vec![KeyEvent::new(KeyCode::Char('P'), ctrl | shift)],
+            vec![KeyEvent::new(KeyCode::Char(' '), none)],
+            vec![KeyEvent::new(KeyCode::F(5), none)],
+            // The display formatter spells these "PgUp"/"PgDn"/"Shift+Tab",
+            // none of which the parser accepts as the same key.
+            vec![KeyEvent::new(KeyCode::PageUp, none)],
+            vec![KeyEvent::new(KeyCode::PageDown, none)],
+            vec![KeyEvent::new(KeyCode::BackTab, shift)],
+            vec![
+                KeyEvent::new(KeyCode::Char('g'), none),
+                KeyEvent::new(KeyCode::Char('g'), none),
+            ],
+            vec![
+                KeyEvent::new(KeyCode::Char('k'), ctrl),
+                KeyEvent::new(KeyCode::Char('p'), ctrl),
+            ],
+        ];
+
+        for seq in cases {
+            let text = key_sequence_to_config(&seq)
+                .unwrap_or_else(|| panic!("{seq:?} has no config spelling"));
+            let parsed = parse_key_sequence(&text)
+                .unwrap_or_else(|| panic!("{text:?} (from {seq:?}) does not parse back"));
+            assert_eq!(parsed, seq, "round trip changed {seq:?} via {text:?}");
+        }
+    }
+
+    #[test]
+    fn key_sequences_with_no_spelling_are_refused() {
+        assert!(key_sequence_to_config(&[]).is_none());
+        assert!(
+            key_sequence_to_config(&[KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE)]).is_none()
         );
     }
 }

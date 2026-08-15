@@ -319,6 +319,12 @@ pub fn register_builtin_commands(registry: &mut CommandRegistry) {
     });
 
     registry.register(CommandEntry {
+        id: "settings.open",
+        name: "Open Settings",
+        handler: cmd_noop,
+    });
+
+    registry.register(CommandEntry {
         id: "line_numbers.toggle",
         name: "Toggle Line Numbers",
         handler: cmd_line_numbers_toggle,
@@ -354,6 +360,15 @@ fn register_app_level_commands(registry: &mut CommandRegistry) {
         ("fuzzy.down", "Finder: Next Item"),
         ("palette.up", "Palette: Previous Item"),
         ("palette.down", "Palette: Next Item"),
+        ("settings.up", "Settings: Previous Item"),
+        ("settings.down", "Settings: Next Item"),
+        ("settings.page_up", "Settings: Page Up"),
+        ("settings.page_down", "Settings: Page Down"),
+        ("settings.focus_out", "Settings: Back to Categories"),
+        ("settings.focus_in", "Settings: Into Settings"),
+        ("settings.activate", "Settings: Open / Change Value"),
+        ("settings.toggle_focus", "Settings: Switch Pane"),
+        ("settings.close", "Settings: Close"),
     ];
     for (id, name) in HIDDEN {
         registry.register_hidden(CommandEntry {

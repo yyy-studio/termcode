@@ -69,6 +69,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("app.quit", "Quit"),
             ("file.save", "Save"),
             ("view.toggle_sidebar", "Toggle Sidebar"),
+            ("settings.open", "Settings"),
             ("edit.undo", "Undo"),
             ("edit.redo", "Redo"),
             ("help.toggle", "Toggle Help"),

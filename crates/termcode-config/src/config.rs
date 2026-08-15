@@ -85,7 +85,7 @@ impl Default for KeymapConfig {
 }
 
 /// Top-level application configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     pub theme: String,

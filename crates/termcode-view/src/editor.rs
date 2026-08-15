@@ -16,6 +16,7 @@ use crate::fuzzy::FuzzyFinderState;
 use crate::image::{ImageEntry, ImageId, TabContent};
 use crate::palette::CommandPaletteState;
 use crate::search::SearchState;
+use crate::settings::SettingsState;
 use crate::tab::TabManager;
 use crate::view::{View, ViewId};
 
@@ -27,6 +28,7 @@ pub enum EditorMode {
     Search,
     FuzzyFinder,
     CommandPalette,
+    Settings,
 }
 
 /// A simplified completion item for display (no dependency on lsp-types).
@@ -75,6 +77,7 @@ pub struct Editor {
     pub search: SearchState,
     pub fuzzy_finder: FuzzyFinderState,
     pub command_palette: CommandPaletteState,
+    pub settings: SettingsState,
     pub completion: CompletionState,
     pub hover: HoverState,
     pub help_visible: bool,
@@ -123,6 +126,7 @@ impl Editor {
             search: SearchState::new(),
             fuzzy_finder: FuzzyFinderState::new(),
             command_palette: CommandPaletteState::new(),
+            settings: SettingsState::new(),
             completion: CompletionState::default(),
             hover: HoverState::default(),
             help_visible: false,

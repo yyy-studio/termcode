@@ -285,7 +285,8 @@ impl Widget for EditorViewWidget<'_> {
                         | EditorMode::FileExplorer
                         | EditorMode::Search
                         | EditorMode::FuzzyFinder
-                        | EditorMode::CommandPalette => {
+                        | EditorMode::CommandPalette
+                        | EditorMode::Settings => {
                             cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
                         }
                         EditorMode::Insert => {

@@ -21,12 +21,12 @@ mouse_enabled = true
 [ui]
 sidebar_width = 30
 sidebar_visible = true
-show_minimap = false
-show_tab_bar = true 
-show_top_bar = true
-tree_style = true 
-show_file_type_emoji = true 
+tree_style = true
+show_file_type_emoji = true
 respect_gitignore = false
+
+[plugins]
+enabled = true
 
 # LSP server configurations
 # [[lsp]]

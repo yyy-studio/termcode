@@ -26,7 +26,11 @@
 # Invalid command names are logged and skipped.
 #
 # Sections: [global], [mode.normal], [mode.insert], [mode.file_explorer],
-#           [mode.search], [mode.fuzzy_finder], [mode.command_palette]
+#           [mode.search], [mode.fuzzy_finder], [mode.command_palette],
+#           [mode.settings]
+#
+# The settings screen (F2) writes here too, into whichever section already
+# binds the command you rebind.
 #
 # Example:
 # [global]

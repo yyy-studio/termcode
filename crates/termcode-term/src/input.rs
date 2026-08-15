@@ -31,12 +31,62 @@ pub struct InputMapper {
     search: Vec<Binding>,
     fuzzy_finder: Vec<Binding>,
     command_palette: Vec<Binding>,
+    settings: Vec<Binding>,
     /// Keys of a partially typed chord, waiting for completion.
     pending: KeySeq,
 }
 
+/// Every mode with a binding table, in the order a rebinding looks for the one
+/// a command already lives in.
+const ALL_MODES: [EditorMode; 7] = [
+    EditorMode::Normal,
+    EditorMode::Insert,
+    EditorMode::FileExplorer,
+    EditorMode::Search,
+    EditorMode::FuzzyFinder,
+    EditorMode::CommandPalette,
+    EditorMode::Settings,
+];
+
+/// The `[mode.<name>]` section a mode's bindings are written to, matching the
+/// field names of `termcode_config::keymap::ModeBindings`.
+pub fn mode_section_name(mode: EditorMode) -> &'static str {
+    match mode {
+        EditorMode::Normal => "normal",
+        EditorMode::Insert => "insert",
+        EditorMode::FileExplorer => "file_explorer",
+        EditorMode::Search => "search",
+        EditorMode::FuzzyFinder => "fuzzy_finder",
+        EditorMode::CommandPalette => "command_palette",
+        EditorMode::Settings => "settings",
+    }
+}
+
 fn key(modifiers: KeyModifiers, code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, modifiers)
+}
+
+/// Keys for the settings screen.
+///
+/// These are also the fallback for a preset that declares no `[mode.settings]`
+/// -- see [`InputMapper::from_preset`].
+fn default_settings_bindings() -> Vec<(KeyEvent, CommandId)> {
+    let none = KeyModifiers::NONE;
+    let ctrl = KeyModifiers::CONTROL;
+    vec![
+        (key(none, KeyCode::Esc), "settings.close"),
+        (key(none, KeyCode::Up), "settings.up"),
+        (key(ctrl, KeyCode::Char('k')), "settings.up"),
+        (key(none, KeyCode::Down), "settings.down"),
+        (key(ctrl, KeyCode::Char('j')), "settings.down"),
+        (key(none, KeyCode::PageUp), "settings.page_up"),
+        (key(none, KeyCode::PageDown), "settings.page_down"),
+        (key(none, KeyCode::Left), "settings.focus_out"),
+        (key(none, KeyCode::Right), "settings.focus_in"),
+        (key(none, KeyCode::Enter), "settings.activate"),
+        (key(none, KeyCode::Char(' ')), "settings.activate"),
+        (key(none, KeyCode::Tab), "settings.toggle_focus"),
+    ]
 }
 
 /// Wrap single-key bindings into one-element sequences.
@@ -69,6 +119,9 @@ impl InputMapper {
             (key(ctrl, KeyCode::Char('x')), "clipboard.cut"),
             (key(ctrl, KeyCode::Char('c')), "clipboard.copy"),
             (key(none, KeyCode::F(1)), "help.toggle"),
+            // F2 rather than the conventional Ctrl+, because most terminals
+            // have no encoding for Ctrl with a punctuation key.
+            (key(none, KeyCode::F(2)), "settings.open"),
         ];
 
         let normal = vec![
@@ -161,6 +214,7 @@ impl InputMapper {
             search: seqs(search),
             fuzzy_finder: seqs(fuzzy_finder),
             command_palette: seqs(command_palette),
+            settings: seqs(default_settings_bindings()),
             pending: Vec::new(),
         }
     }
@@ -170,6 +224,14 @@ impl InputMapper {
     /// A preset defines the whole keymap, so anything it omits is unbound. That
     /// keeps presets from inheriting bindings that contradict them — a Vim
     /// preset does not silently keep `Ctrl+D` on "go to definition".
+    ///
+    /// `[mode.settings]` is the one exception. That mode consults no global
+    /// table, so a preset written before the settings screen existed — or one a
+    /// user wrote from an older example — would leave it with no working keys
+    /// at all. The settings screen is infrastructure rather than an editing
+    /// surface, so a preset that says nothing about it gets the defaults
+    /// instead of nothing. Declaring even one binding there takes full control,
+    /// as with every other mode.
     pub fn from_preset(preset: &KeymapPreset, registry: &CommandRegistry) -> Self {
         Self {
             global: build_bindings(&preset.global, registry, "global"),
@@ -187,6 +249,11 @@ impl InputMapper {
                 registry,
                 "mode.command_palette",
             ),
+            settings: if preset.modes.settings.is_empty() {
+                seqs(default_settings_bindings())
+            } else {
+                build_bindings(&preset.modes.settings, registry, "mode.settings")
+            },
             pending: Vec::new(),
         }
     }
@@ -255,6 +322,97 @@ impl InputMapper {
         None
     }
 
+    /// Which table currently binds `command_id`, and to what keys.
+    ///
+    /// The settings screen writes a rebinding back into the section the command
+    /// already lives in: moving `search.next` would be pointless in `[global]`,
+    /// which the overlay modes never consult. `None` for the mode means the
+    /// binding is global; `None` overall means the command is unbound.
+    pub fn binding_scope(&self, command_id: &str) -> Option<(Option<EditorMode>, String)> {
+        for mode in ALL_MODES {
+            if let Some((seq, _)) = self
+                .mode_table(mode)
+                .iter()
+                .find(|(_, cmd)| *cmd == command_id)
+            {
+                return Some((Some(mode), format_key_sequence(seq)));
+            }
+        }
+        self.global
+            .iter()
+            .find(|(_, cmd)| *cmd == command_id)
+            .map(|(seq, _)| (None, format_key_sequence(seq)))
+    }
+
+    /// Every key sequence bound to `command_id`, formatted for display.
+    ///
+    /// `keybindings.toml` is indexed by key, not by command, so adding a
+    /// binding never removes the one a preset already gave the command. The
+    /// settings screen shows all of them rather than the first, which would
+    /// leave a just-changed row still displaying the old keys.
+    pub fn bindings_for(&self, command_id: &str) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        for table in ALL_MODES
+            .iter()
+            .map(|mode| self.mode_table(*mode))
+            .chain(std::iter::once(&self.global))
+        {
+            for (seq, cmd) in table {
+                if *cmd != command_id {
+                    continue;
+                }
+                let formatted = format_key_sequence(seq);
+                // The same keys can be declared in several mode tables; listing
+                // them once each would read as a conflict that is not there.
+                if !keys.contains(&formatted) {
+                    keys.push(formatted);
+                }
+            }
+        }
+        keys
+    }
+
+    /// Bindings already in the table for `mode` (or `[global]`) that `seq`
+    /// would collide with: the same sequence bound elsewhere, or a sequence
+    /// that shares a prefix with it.
+    ///
+    /// An exact match fires immediately, so a binding that is the prefix of a
+    /// longer one makes the longer one unreachable within its table -- the
+    /// hazard `tests/keymap_presets.rs` guards the shipped presets against, and
+    /// which a user rebinding keys can otherwise walk straight into.
+    pub fn conflicts(
+        &self,
+        mode: Option<EditorMode>,
+        seq: &[KeyEvent],
+        command_id: &str,
+    ) -> Vec<(String, CommandId)> {
+        let table = match mode {
+            Some(mode) => self.mode_table(mode),
+            None => &self.global,
+        };
+        table
+            .iter()
+            .filter(|(existing, cmd)| {
+                *cmd != command_id
+                    && (existing.starts_with(seq) || seq.starts_with(existing.as_slice()))
+            })
+            .map(|(existing, cmd)| (format_key_sequence(existing), *cmd))
+            .collect()
+    }
+
+    /// The bindings declared for `mode` alone, without the global fallback.
+    fn mode_table(&self, mode: EditorMode) -> &Vec<Binding> {
+        match mode {
+            EditorMode::Normal => &self.normal,
+            EditorMode::Insert => &self.insert,
+            EditorMode::FileExplorer => &self.file_explorer,
+            EditorMode::Search => &self.search,
+            EditorMode::FuzzyFinder => &self.fuzzy_finder,
+            EditorMode::CommandPalette => &self.command_palette,
+            EditorMode::Settings => &self.settings,
+        }
+    }
+
     /// Apply keybinding overrides from configuration on top of the current map.
     /// Validates command names against the registry. Invalid commands are logged
     /// and skipped.
@@ -278,20 +436,20 @@ impl InputMapper {
             &config.modes.command_palette,
             registry,
         );
+        apply_binding_overrides(&mut self.settings, &config.modes.settings, registry);
     }
 
     /// Tables to search for `mode`, in precedence order.
     fn tables(&self, mode: EditorMode) -> Vec<&Vec<Binding>> {
-        let mode_table = match mode {
-            EditorMode::Normal => &self.normal,
-            EditorMode::Insert => &self.insert,
-            EditorMode::FileExplorer => &self.file_explorer,
-            EditorMode::Search => &self.search,
-            EditorMode::FuzzyFinder => &self.fuzzy_finder,
-            EditorMode::CommandPalette => &self.command_palette,
-        };
+        let mode_table = self.mode_table(mode);
         match mode {
-            EditorMode::Search | EditorMode::FuzzyFinder | EditorMode::CommandPalette => {
+            // Settings joins the overlay modes: its keys drive the screen in
+            // front of the user, and a global `Ctrl+P` firing from inside it
+            // would leave the settings behind a finder it cannot return to.
+            EditorMode::Search
+            | EditorMode::FuzzyFinder
+            | EditorMode::CommandPalette
+            | EditorMode::Settings => {
                 vec![mode_table]
             }
             _ => vec![mode_table, &self.global],

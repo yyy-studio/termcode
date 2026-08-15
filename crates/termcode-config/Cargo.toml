@@ -12,7 +12,10 @@ termcode-core = { workspace = true }
 termcode-theme = { workspace = true }
 serde = { workspace = true }
 toml.workspace = true
+toml_edit.workspace = true
 crossterm.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
+tempfile.workspace = true
 log.workspace = true
 dirs = "6"

@@ -81,7 +81,9 @@ LspBridge (tokio runtime) → mpsc::UnboundedSender<AppEvent::Lsp>
 
 ### EditorMode
 
-Six modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `CommandPalette`. Mode determines which keybindings are active in `InputMapper`. The `CommandPalette` has sub-modes via `PaletteMode` enum (`Commands`, `Themes`).
+Seven modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `CommandPalette`, `Settings`. Mode determines which keybindings are active in `InputMapper`. The `CommandPalette` has sub-modes via `PaletteMode` enum (`Commands`, `Themes`, `Keymaps`).
+
+Adding a mode touches every exhaustive `match` on it: `InputMapper::mode_table`/`tables`, `mode_section_name`, `ModeBindings` (config), `mode_to_string` (plugin API), the status bar, and the cursor style in `editor_view.rs`.
 
 ### Adding a New Command
 
@@ -104,9 +106,11 @@ Plugins are sandboxed Lua scripts discovered from `~/.config/termcode/plugins/` 
 
 **Sandbox restrictions:** Restricted Lua stdlib (base, string, table, math, utf8, safe os subset). Instruction and memory limits prevent resource exhaustion. Per-plugin `require()` is scoped to the plugin directory (no path traversal).
 
-**Hook events:** `on_open`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`. Plugins register hooks via `termcode.on("event_name", handler)`.
+**Hook events:** `on_open`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`. Plugins register hooks via `plugin.on("event_name", handler)`.
 
-**Plugin commands:** Plugins register commands via `termcode.register_command("name", handler)` which become available in the command palette. Commands execute through thread-local `EDITOR_PTR` for safe mutable access during execution.
+**Plugin commands:** Plugins register commands via `plugin.register_command("name", "description", handler)`, which the loader exposes as `plugin.<plugin-name>.<name>` in the command palette. Commands execute through thread-local `EDITOR_PTR` for safe mutable access during execution.
+
+The Lua globals are `plugin`, `editor` and `log` (see `runtime/plugins/example/init.lua`) -- there is no `termcode` table.
 
 **Deferred actions:** Plugins cannot directly mutate app state. Instead, actions like `OpenFile` and `ExecuteCommand` are queued and processed after hook/command execution completes.
 
@@ -190,7 +194,13 @@ callers open startup files between the two, and Insert needs a view to exist.
    `[mode.*]` sections (see `vim.toml`)
 2. Bind every command the preset needs -- there is no inheritance from defaults
 3. Set `[meta] initial_mode = "insert"` if the keymap has no modal layer
-4. Add the name to `PRESETS` in `crates/termcode-term/tests/keymap_presets.rs`
+4. `[mode.settings]` is optional: a preset that omits it entirely inherits the
+   built-in settings keys, since that mode consults no global table and would
+   otherwise have none. Declaring even one binding there takes over the whole
+   section, as with every other mode -- so a partial section is the one way to
+   end up with a half-usable screen (`Esc` still closes it regardless;
+   `handle_settings_key` falls back to that when nothing is bound)
+5. Add the name to `PRESETS` in `crates/termcode-term/tests/keymap_presets.rs`
    so it is checked for unparsable keys, unknown commands, shadowed chords, and
    unknown sections
 
@@ -213,6 +223,79 @@ File tree display is controlled by two flat bools under `[ui]` in config (uses `
 - `show_file_type_emoji = true|false` — show file type emoji icons
 
 File type icons are configured per-theme via `[icons]` section (directory_open, directory_closed, file_default) and `[icons.extensions]` table (extension → emoji). User overrides merge on top of defaults.
+
+### Settings Screen
+
+`EditorMode::Settings` (`F2`, the top bar button, or `settings.open` from the
+palette -- the button goes through `MouseAction::OpenSettings`, since building
+the rows needs `App`) is a two-pane
+screen: a fixed list of categories (Appearance, Editor, Keybindings, Plugins)
+and the rows of the selected one. It resolves keys like the other overlays --
+mode table only, no global fallback -- so a shortcut cannot navigate away from
+a screen the user is in the middle of.
+
+`SettingsState` (termcode-view) holds only the cursor, the rows, and the capture
+flag. It never builds the rows: the available themes, keymaps, plugins and
+bindings are known to `App`, not to `termcode-view`, so `App::reload_settings_items`
+fills them the same way the command palette is fed its command list. Everything
+about a row that the frontend needs -- the value, where it is written, whether it
+needs a restart -- travels in `SettingItem`.
+
+The screen is three levels deep and the arrows move between them, never editing:
+`settings.focus_in` (Right) steps categories → settings, `settings.focus_out`
+(Left) steps back out and also closes an open value list. `settings.activate`
+(Enter **and** Space) is the only thing that changes anything.
+
+`SettingValue::Choice` and `SettingValue::Int` are therefore **not** stepped in
+place. Activating one opens a `SettingsPicker` -- a list floating over the
+screen, driven by the same `[mode.settings]` bindings -- and only
+`picker_commit` writes back to the row. Stepping in place applied every value on
+the way to the wanted one, so walking to `vim` ran the editor under `helix` en
+route and could take away the keys being used to walk. A number's list is built
+from its range by `step`, and `set_choice` turns the chosen position back into
+the number. While the picker is open `run_picker_command` swallows everything
+else, so no command can act on the screen behind it.
+
+`SettingItem::live_preview` opts a row into applying each option as the
+highlight passes over it (`SettingsAction::Preview`), reverting on cancel
+(`PreviewReverted`); neither saves. Only the theme sets it -- a colour scheme
+cannot take the keyboard away, and a keymap can.
+
+Changing a row does two things, in `App::apply_and_save_setting`:
+
+1. `apply_config_value` matches the row's dotted path and updates the running
+   editor. Settings the editor only reads at startup (`editor.mouse_enabled`,
+   anything under `plugins`) fall through it and are flagged `restart_required`.
+2. `persist_config_value` writes it to the config file **that was actually
+   loaded** -- `App.config_path`, which `App::new` points at the project-local
+   `config/config.toml` when that is what it read.
+
+Writes go through `termcode_config::writer`, which edits the TOML document with
+`toml_edit` and replaces only the key that changed. Re-serialising `AppConfig`
+would drop the user's comments, reorder their keys, and materialise defaults
+they never wrote. `set_value` replaces an existing value _in place_ rather than
+re-inserting the key, because a comment above a setting is attached to the key.
+
+Keybinding rows are captured, not typed: `Enter` starts a capture, each key is
+appended, `Enter` commits (so `g g` is possible), and `Esc` cancels -- which is
+why `Esc` itself cannot be bound from this screen. The captured keys are
+serialised by `key_sequence_to_config`, **not** by the status-bar formatter:
+that one prints `PgUp`/`Shift+Tab`, neither of which `parse_key_combo` reads
+back as the same key. Anything written here round-trips through the parser
+before it is stored, so what is in memory is what the file will produce.
+
+A rebinding is written into the section the command is already bound in
+(`InputMapper::binding_scope`), defaulting to `[global]`. Moving `search.next`
+into `[global]` would leave it unreachable, since the overlay modes never
+consult that table. `keybindings.toml` is indexed by key, so a new binding
+**adds** to the command rather than replacing it; the row shows every binding
+(`InputMapper::bindings_for`) instead of the first, and `InputMapper::conflicts`
+reports sequences the new one collides with or shadows.
+
+`config.toml` keys that nothing reads (`ui.show_tab_bar`, `ui.show_top_bar`,
+`ui.show_minimap`, `editor.word_wrap`, `editor.auto_save*`) are deliberately not
+listed on this screen: a settings row that does nothing when toggled is worse
+than no row.
 
 ### File Explorer
 
