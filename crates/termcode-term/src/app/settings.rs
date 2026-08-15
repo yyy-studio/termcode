@@ -744,29 +744,6 @@ mod tests {
     }
 
     #[test]
-    fn left_backs_out_of_the_value_list() {
-        let (mut app, config_path) = app_with_settings("list-back");
-        select(&mut app, "Theme");
-        let before = app.theme_name.clone();
-
-        app.run_settings_command("settings.activate");
-        step_off_current(&mut app);
-        app.run_settings_command("settings.focus_out");
-
-        assert!(
-            app.editor.settings.picker.is_none(),
-            "the list should close"
-        );
-        assert_eq!(app.theme_name, before, "and the preview be rolled back");
-        assert_eq!(
-            app.editor.settings.focus,
-            SettingsFocus::Items,
-            "not the panes"
-        );
-        assert!(!config_path.exists());
-    }
-
-    #[test]
     fn a_captured_chord_is_written_and_bound_immediately() {
         let (mut app, _path) = app_with_settings("rebind");
         app.editor.settings.category_index = 2; // Keybindings
@@ -869,96 +846,134 @@ mod tests {
         assert_eq!(app.editor.mode, EditorMode::Settings, "must stay open");
     }
 
+    /// Which Appearance rows preview as their list is browsed.
+    ///
+    /// This is the invariant the lockout hinged on, and it holds no matter what
+    /// is installed on the machine running the test.
     #[test]
-    fn a_keymap_is_not_applied_while_the_list_is_still_open() {
-        let (mut app, config_path) = app_with_settings("no-keymap-preview");
-        select(&mut app, "Keymap Preset");
-        let before = app.keymap_name.clone();
+    fn only_the_theme_previews_while_its_list_is_open() {
+        let (app, _path) = app_with_settings("preview-flags");
+        assert!(
+            item_labelled(&app, "Theme").live_preview,
+            "a theme has to be seen to be chosen"
+        );
+        assert!(
+            !item_labelled(&app, "Keymap Preset").live_preview,
+            "previewing a keymap would change the keys driving the list"
+        );
+    }
+
+    /// Put one row of our own on screen.
+    ///
+    /// The Appearance rows are built from whatever themes and keymaps are
+    /// installed, which is nothing at all on a CI machine -- so anything about
+    /// how the list *behaves* is tested against a row the test owns.
+    fn with_row(app: &mut App, item: SettingItem) {
+        app.editor.settings.load_items(vec![item]);
+        app.editor.settings.selected = 0;
+    }
+
+    fn width_row() -> SettingItem {
+        SettingItem::new(
+            "Sidebar Width",
+            SettingValue::Int {
+                value: 30,
+                min: 28,
+                max: 32,
+                step: 1,
+            },
+            config_target(&["ui", "sidebar_width"]),
+        )
+    }
+
+    #[test]
+    fn a_value_is_not_applied_while_the_list_is_still_open() {
+        let (mut app, config_path) = app_with_settings("no-preview");
+        with_row(&mut app, width_row());
+        let before = app.editor.file_explorer.width;
 
         app.run_settings_command("settings.activate");
-        // Walking past a keymap must not put the editor under it: that is how
-        // moving through the list could take away the keys driving the list.
-        for _ in 0..3 {
-            app.run_settings_command("settings.down");
-        }
-        assert_eq!(app.keymap_name, before, "no keymap may be applied yet");
+        // Walking past a value must not apply it: that is how moving through
+        // the keymap list could take away the keys driving the list.
+        app.run_settings_command("settings.down");
+        assert_eq!(app.editor.file_explorer.width, before, "not applied yet");
         assert!(!config_path.exists(), "nothing may be written yet");
 
         app.run_settings_command("settings.activate");
-        assert_ne!(app.keymap_name, before, "Enter is what applies it");
+        assert_eq!(
+            app.editor.file_explorer.width, 31,
+            "Enter is what applies it"
+        );
         assert!(
             std::fs::read_to_string(&config_path)
                 .unwrap()
-                .contains("preset")
+                .contains("sidebar_width = 31")
         );
-    }
-
-    /// A direction the open picker can actually move in. The current value may
-    /// be at either end of the list -- the default theme is last
-    /// alphabetically -- so a fixed direction would silently do nothing.
-    fn step_off_current(app: &mut App) -> &'static str {
-        let picker = app.editor.settings.picker.as_ref().expect("picker is open");
-        assert!(
-            picker.options.len() > 1,
-            "need more than one option to move to, got {:?}",
-            picker.options
-        );
-        let cmd = if picker.selected > 0 {
-            "settings.up"
-        } else {
-            "settings.down"
-        };
-        app.run_settings_command(cmd);
-        cmd
     }
 
     #[test]
-    fn a_theme_previews_as_the_list_moves_and_rolls_back_on_esc() {
-        let (mut app, config_path) = app_with_settings("theme-preview");
-        select(&mut app, "Theme");
-        let before = app.theme_name.clone();
+    fn a_previewing_row_applies_as_the_list_moves_and_rolls_back() {
+        let (mut app, config_path) = app_with_settings("preview");
+        with_row(&mut app, width_row().with_live_preview());
 
         app.run_settings_command("settings.activate");
-        step_off_current(&mut app);
-        assert_ne!(app.theme_name, before, "the theme should be showing");
+        app.run_settings_command("settings.down");
+        assert_eq!(app.editor.file_explorer.width, 31, "should be showing");
         assert!(!config_path.exists(), "a preview must not be saved");
 
         app.run_settings_command("settings.close");
-        assert_eq!(app.theme_name, before, "Esc must put the old theme back");
+        assert_eq!(app.editor.file_explorer.width, 30, "Esc must roll it back");
         assert!(!config_path.exists());
     }
 
     #[test]
-    fn a_previewed_theme_is_saved_once_it_is_chosen() {
-        let (mut app, config_path) = app_with_settings("theme-commit");
-        select(&mut app, "Theme");
-        let before = app.theme_name.clone();
+    fn a_previewed_value_is_saved_once_it_is_chosen() {
+        let (mut app, config_path) = app_with_settings("preview-commit");
+        with_row(&mut app, width_row().with_live_preview());
 
         app.run_settings_command("settings.activate");
-        step_off_current(&mut app);
+        app.run_settings_command("settings.down");
         app.run_settings_command("settings.activate");
 
-        assert_ne!(app.theme_name, before);
+        assert_eq!(app.editor.file_explorer.width, 31);
         let written = std::fs::read_to_string(&config_path).unwrap();
-        assert!(
-            written.contains(&format!("theme = \"{}\"", app.theme_name)),
-            "{written}"
-        );
+        assert!(written.contains("sidebar_width = 31"), "{written}");
         assert!(app.editor.settings.picker.is_none());
+    }
+
+    #[test]
+    fn left_backs_out_of_the_value_list() {
+        let (mut app, config_path) = app_with_settings("list-back");
+        with_row(&mut app, width_row().with_live_preview());
+
+        app.run_settings_command("settings.activate");
+        app.run_settings_command("settings.down");
+        app.run_settings_command("settings.focus_out");
+
+        assert!(
+            app.editor.settings.picker.is_none(),
+            "the list should close"
+        );
+        assert_eq!(app.editor.file_explorer.width, 30, "preview rolled back");
+        assert_eq!(
+            app.editor.settings.focus,
+            SettingsFocus::Items,
+            "backing out of the list is not backing out of the pane"
+        );
+        assert!(!config_path.exists());
     }
 
     #[test]
     fn the_list_swallows_keys_that_would_act_on_the_screen_behind_it() {
         let (mut app, _path) = app_with_settings("list-owns-keys");
-        select(&mut app, "Theme");
-        let row = app.editor.settings.selected;
+        with_row(&mut app, width_row());
         app.run_settings_command("settings.activate");
 
         // Tab would switch panes, and closing the whole screen mid-choice
         // would strand a preview.
         app.run_settings_command("settings.toggle_focus");
         assert_eq!(app.editor.settings.focus, SettingsFocus::Items);
-        assert_eq!(app.editor.settings.selected, row);
+        assert_eq!(app.editor.settings.selected, 0);
         assert!(app.editor.settings.picker.is_some());
         assert_eq!(app.editor.mode, EditorMode::Settings);
     }
