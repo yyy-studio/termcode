@@ -23,6 +23,7 @@ fn mode_to_string(mode: &EditorMode) -> &'static str {
         EditorMode::Search => "search",
         EditorMode::FuzzyFinder => "fuzzy_finder",
         EditorMode::CommandPalette => "command_palette",
+        EditorMode::Settings => "settings",
     }
 }
 

@@ -41,6 +41,8 @@ use crate::lsp_bridge::LspBridge;
 use crate::mouse::{self, MouseAction};
 use crate::render;
 
+mod settings;
+
 /// Palette id for "no preset": the built-in keymap. Not a filename, so it
 /// cannot clash with a preset discovered on disk.
 const BUILTIN_KEYMAP: &str = "(built-in)";
@@ -64,6 +66,22 @@ pub struct App {
     plugin_manager: Option<PluginManager>,
     /// User keybinding overrides, kept so a live keymap switch can re-apply them.
     kb_config: termcode_config::keymap::KeybindingConfig,
+    /// The config file settings changes are written back to: whichever one was
+    /// actually loaded, so a project-local config is not silently bypassed.
+    config_path: PathBuf,
+    /// Where keybinding overrides are written. Always the user config
+    /// directory: keymap presets ship read-only.
+    keybindings_path: PathBuf,
+    /// Everything loaded at startup, kept so the settings screen can show the
+    /// values that live nowhere else (plugins, LSP servers, chord timeout).
+    app_config: AppConfig,
+    /// Name of the theme in use, for the settings screen and for knowing what
+    /// to write to the config file.
+    theme_name: String,
+    /// Name of the keymap in use, or [`BUILTIN_KEYMAP`].
+    keymap_name: String,
+    /// Keys pressed so far while the settings screen is capturing a rebinding.
+    settings_capture: Vec<KeyEvent>,
     /// How long a partially typed chord stays pending before it is abandoned.
     chord_timeout: Duration,
     /// When the current pending chord started, for the timeout above.
@@ -72,19 +90,26 @@ pub struct App {
 
 impl App {
     pub fn new(root: Option<PathBuf>) -> Self {
-        let config_path = termcode_config::default::config_dir().join("config.toml");
+        let mut config_path = termcode_config::default::config_dir().join("config.toml");
         let mut app_config = AppConfig::load(&config_path);
 
         // Also try project-local config/config.toml
         let project_config = PathBuf::from("config/config.toml");
         if project_config.exists() {
             app_config = AppConfig::load(&project_config);
+            config_path = project_config;
         }
 
-        Self::with_config(root, app_config)
+        let mut app = Self::with_config(root, app_config);
+        // Settings are saved back to the file they came from.
+        app.config_path = config_path;
+        app
     }
 
     pub fn with_config(root: Option<PathBuf>, app_config: AppConfig) -> Self {
+        // The settings screen reports and rewrites what was loaded, so keep a
+        // copy before the pieces below are moved out of it.
+        let startup_config = app_config.clone();
         let (theme, startup_theme_status) = match load_theme_by_name(&app_config.theme) {
             Ok(theme) => (theme, None),
             Err(e) => {
@@ -232,6 +257,16 @@ impl App {
             image_cache: HashMap::new(),
             plugin_manager,
             kb_config,
+            config_path: termcode_config::default::config_dir().join("config.toml"),
+            keybindings_path,
+            theme_name: startup_config.theme.clone(),
+            keymap_name: startup_config
+                .keymap
+                .preset
+                .clone()
+                .unwrap_or_else(|| BUILTIN_KEYMAP.to_string()),
+            app_config: startup_config,
+            settings_capture: Vec::new(),
             chord_timeout: Duration::from_millis(app_config.keymap.chord_timeout_ms),
             chord_started: None,
         }
@@ -375,6 +410,19 @@ impl App {
                         PALETTE_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
                     self.editor.command_palette.visible_height =
                         palette_height.saturating_sub(OVERLAY_CHROME);
+
+                    // Must match the row budget in SettingsWidget: the settings
+                    // screen fills the editor area, minus its border and the
+                    // hint line at the bottom.
+                    self.editor.settings.visible_height = (app_layout.editor_area.height as usize)
+                        .saturating_sub(crate::ui::settings::CHROME_ROWS);
+                    if let Some(picker) = &mut self.editor.settings.picker {
+                        let rows = crate::ui::settings::picker_visible_rows(
+                            app_layout.editor_area.height,
+                            picker.options.len(),
+                        );
+                        picker.set_visible_height(rows);
+                    }
                 }
 
                 self.editor.sync_tab_modified();
@@ -483,6 +531,12 @@ impl App {
         // A click can move the cursor or change the mode, so a chord started
         // before it would complete against the wrong target.
         self.abandon_pending_chord();
+        // A click can also take the user out of the settings screen, and a
+        // half-typed rebinding must not still be waiting when they come back.
+        if self.editor.mode == EditorMode::Settings {
+            self.editor.settings.cancel_capture();
+            self.settings_capture.clear();
+        }
         let (w, h) = self.terminal_size;
         let area = ratatui::layout::Rect::new(0, 0, w, h);
         let app_layout = layout::compute_layout(
@@ -502,6 +556,7 @@ impl App {
                 self.editor.tabs.set_active(index);
                 self.editor.sync_active_view_to_tab();
             }
+            MouseAction::OpenSettings => self.open_settings(),
         }
     }
 
@@ -620,6 +675,10 @@ impl App {
             }
             EditorMode::CommandPalette => {
                 self.handle_command_palette_key(key);
+                return;
+            }
+            EditorMode::Settings => {
+                self.handle_settings_key(key);
                 return;
             }
             _ => {}
@@ -1078,6 +1137,7 @@ impl App {
             "palette.open" => Some(Self::open_command_palette),
             "theme.list" => Some(Self::open_theme_palette),
             "keymap.list" => Some(Self::open_keymap_palette),
+            "settings.open" => Some(Self::open_settings),
             "goto.definition" => Some(Self::request_definition),
             "lsp.hover" => Some(Self::request_hover),
             "lsp.trigger_completion" => Some(Self::trigger_completion),
@@ -1333,9 +1393,8 @@ impl App {
         self.editor.switch_mode(EditorMode::CommandPalette);
     }
 
-    /// Switch keymaps for this session. Like theme switching, this does not
-    /// rewrite `config.toml`; `[keymap] preset` still decides what loads at
-    /// startup.
+    /// Switch keymaps for this session. Selecting one from the command palette
+    /// does not rewrite `config.toml`; the settings screen saves it separately.
     fn apply_keymap(&mut self, name: &str) {
         let preset = if name == BUILTIN_KEYMAP {
             None
@@ -1351,17 +1410,33 @@ impl App {
         self.input_mapper =
             build_input_mapper(preset.as_ref(), &self.command_registry, &self.kb_config);
         self.chord_started = None;
+        self.keymap_name = name.to_string();
         self.editor.default_mode = match preset.as_ref() {
             Some(p) if p.meta.starts_in_insert() => EditorMode::Insert,
             _ => EditorMode::Normal,
         };
-        self.editor.switch_to_default_mode();
+        // Returning to the resting mode would close the settings screen the
+        // keymap was picked from, before the user has finished with it.
+        if self.editor.mode != EditorMode::Settings {
+            self.editor.switch_to_default_mode();
+        }
         let warnings = preset.as_ref().map(|p| p.warnings()).unwrap_or_default();
         self.editor.status_message = Some(if warnings.is_empty() {
             format!("Keymap: {name}")
         } else {
             format!("Keymap: {name}  |  {}", warnings.join("  |  "))
         });
+    }
+
+    /// Rebuild the input mapper from the keymap in use plus the current
+    /// overrides. Used after a rebinding, which changes `kb_config` in place.
+    fn rebuild_input_mapper(&mut self) {
+        let preset = (self.keymap_name != BUILTIN_KEYMAP)
+            .then(|| termcode_config::keymap::load_keymap_preset(&self.keymap_name))
+            .flatten();
+        self.input_mapper =
+            build_input_mapper(preset.as_ref(), &self.command_registry, &self.kb_config);
+        self.chord_started = None;
     }
 
     fn apply_theme(&mut self, name: &str) {
@@ -1379,6 +1454,7 @@ impl App {
         match termcode_theme::loader::load_theme(&path) {
             Ok(theme) => {
                 self.editor.switch_theme(theme);
+                self.theme_name = name.to_string();
                 self.editor.status_message = Some(format!("Theme: {name}"));
             }
             Err(e) => {

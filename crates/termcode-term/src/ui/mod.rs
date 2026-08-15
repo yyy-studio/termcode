@@ -10,6 +10,7 @@ pub mod image_view;
 pub mod overlay;
 pub mod pane_focus;
 pub mod search;
+pub mod settings;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod top_bar;

@@ -35,6 +35,7 @@ fn sections(
         ("mode.search", &preset.modes.search),
         ("mode.fuzzy_finder", &preset.modes.fuzzy_finder),
         ("mode.command_palette", &preset.modes.command_palette),
+        ("mode.settings", &preset.modes.settings),
     ]
 }
 
@@ -373,4 +374,69 @@ fn only_the_non_modal_preset_starts_in_insert() {
             "{name} is modal and must rest in Normal mode"
         );
     }
+}
+
+/// A preset that says nothing about the settings screen must still be able to
+/// drive it. That mode consults no global table, so without a fallback the
+/// screen would have no working keys at all -- which is exactly what happened
+/// to every preset written before the screen existed.
+#[test]
+fn a_preset_without_a_settings_section_still_gets_settings_keys() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use termcode_term::input::{InputMapper, KeyResolution};
+    use termcode_view::editor::EditorMode;
+
+    let preset: KeymapPreset = toml::from_str("[meta]\nname = \"bare\"\n").unwrap();
+    assert!(preset.modes.settings.is_empty());
+
+    let mut mapper = InputMapper::from_preset(&preset, &registry());
+    for (code, expected) in [
+        (KeyCode::Up, "settings.up"),
+        (KeyCode::Down, "settings.down"),
+        (KeyCode::Left, "settings.focus_out"),
+        (KeyCode::Right, "settings.focus_in"),
+        (KeyCode::Enter, "settings.activate"),
+        (KeyCode::Char(' '), "settings.activate"),
+        (KeyCode::Esc, "settings.close"),
+    ] {
+        let resolved = mapper.resolve_key(
+            EditorMode::Settings,
+            KeyEvent::new(code, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            resolved,
+            KeyResolution::Match(expected),
+            "{code:?} should fall back to {expected}"
+        );
+    }
+}
+
+/// ...but a preset that does declare the section owns it outright, exactly like
+/// every other mode.
+#[test]
+fn a_declared_settings_section_replaces_the_fallback() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use termcode_term::input::{InputMapper, KeyResolution};
+    use termcode_view::editor::EditorMode;
+
+    let preset: KeymapPreset =
+        toml::from_str("[meta]\nname = \"one\"\n[mode.settings]\n\"q\" = \"settings.close\"\n")
+            .unwrap();
+    let mut mapper = InputMapper::from_preset(&preset, &registry());
+
+    assert_eq!(
+        mapper.resolve_key(
+            EditorMode::Settings,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
+        ),
+        KeyResolution::Match("settings.close")
+    );
+    assert_eq!(
+        mapper.resolve_key(
+            EditorMode::Settings,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)
+        ),
+        KeyResolution::NoMatch,
+        "the preset's own section is the whole story"
+    );
 }

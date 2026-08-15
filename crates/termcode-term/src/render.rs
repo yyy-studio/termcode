@@ -23,6 +23,7 @@ use crate::ui::hover::HoverWidget;
 use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
 use crate::ui::search::SearchOverlayWidget;
+use crate::ui::settings::SettingsWidget;
 use crate::ui::status_bar::StatusBarWidget;
 use crate::ui::tab_bar::TabBarWidget;
 use crate::ui::top_bar::TopBarWidget;
@@ -143,6 +144,10 @@ pub fn render(
         EditorMode::CommandPalette => {
             let palette_widget = CommandPaletteWidget::new(&editor.command_palette, &editor.theme);
             frame.render_widget(palette_widget, app_layout.editor_area);
+        }
+        EditorMode::Settings => {
+            let settings_widget = SettingsWidget::new(&editor.settings, &editor.theme);
+            frame.render_widget(settings_widget, app_layout.editor_area);
         }
         _ => {}
     }

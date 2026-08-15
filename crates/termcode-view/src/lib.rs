@@ -7,5 +7,6 @@ pub mod fuzzy;
 pub mod image;
 pub mod palette;
 pub mod search;
+pub mod settings;
 pub mod tab;
 pub mod view;

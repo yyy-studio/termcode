@@ -11,6 +11,7 @@
   <a href="#getting-started">Getting Started</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="#keybindings">Keybindings</a> &bull;
+  <a href="#settings">Settings</a> &bull;
   <a href="#configuration">Configuration</a> &bull;
   <a href="#themes">Themes</a> &bull;
   <a href="#plugins">Plugins</a> &bull;
@@ -70,12 +71,13 @@ cargo install --path .
 
 | Feature                 | Details                                                                                      |
 | ----------------------- | -------------------------------------------------------------------------------------------- |
-| **Modal editing**       | 6 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette                |
+| **Modal editing**       | 7 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette, Settings      |
 | **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, HTML, CSS, Bash, TOML, JSON, Markdown |
 | **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics                            |
 | **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring                                             |
 | **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all                          |
-| **Command palette**     | `Ctrl+Shift+P` -- searchable command list with theme switcher                                |
+| **Command palette**     | `Ctrl+Shift+P` -- searchable command list, plus theme and keymap switchers                   |
+| **Settings screen**     | `F2` -- edit themes, keymaps, editor options and keybindings; saved to `config.toml`         |
 | **Multi-tab**           | Open multiple files, navigate with `Alt+Left/Right`, close with `Ctrl+W`                     |
 | **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes                            |
 | **File explorer**       | `Ctrl+B` -- tree view sidebar with `.gitignore` awareness                                    |
@@ -122,8 +124,9 @@ termcode                     # Empty editor
 5. **Search** -- `Ctrl+F` to search, `Ctrl+H` to search & replace
 6. **Tabs** -- open multiple files, switch with `Alt+Left` / `Alt+Right`, close with `Ctrl+W`
 7. **Commands** -- `Ctrl+Shift+P` to open command palette (theme switch, all commands)
-8. **LSP** -- auto-activates if a language server is configured (see [Configuration](#configuration))
-9. **Quit** -- `Ctrl+Q`
+8. **Settings** -- `F2` to change themes, keymaps, editor options and keybindings (see [Settings](#settings))
+9. **LSP** -- auto-activates if a language server is configured (see [Configuration](#configuration))
+10. **Quit** -- `Ctrl+Q`
 
 ## Keybindings
 
@@ -155,6 +158,7 @@ termcode                     # Empty editor
 | `Ctrl+C`                     | Copy selection                  |
 | `Ctrl+Q`                     | Quit (confirms if unsaved)      |
 | `F1` / `?`                   | Help                            |
+| `F2`                         | Settings                        |
 
 ### Edit Mode
 
@@ -198,6 +202,8 @@ a file there also replaces a shipped preset of the same name.
 
 Switch keymaps for the current session from the command palette
 (**Select Keymap**); `[keymap] preset` still decides what loads at startup.
+Picking one in [Settings](#settings) (`F2`) writes it to `config.toml` as well,
+so it survives a restart.
 
 Two keys are deliberately not preset-controlled:
 
@@ -215,6 +221,50 @@ text rather than lost.
 
 All keybindings are customizable via `keybindings.toml`. See [Configuration](#configuration).
 
+## Settings
+
+Press `F2`, click **F2 Settings** in the top bar, or run **Open Settings** from
+the command palette, for a screen that edits the configuration in place:
+
+| Category        | What it holds                                                            |
+| --------------- | ------------------------------------------------------------------------ |
+| **Appearance**  | Theme, keymap preset, sidebar visibility and width, file tree style      |
+| **Editor**      | Tab size, spaces vs tabs, line numbers, scroll-off, mouse, chord timeout |
+| **Keybindings** | Every command and the keys bound to it, rebindable in place              |
+| **Plugins**     | Plugin on/off switches, and the configured LSP servers for reference     |
+
+The screen is three levels deep, and the arrows move between them:
+
+| Key               | Action                                                       |
+| ----------------- | ------------------------------------------------------------ |
+| `↑` `↓`           | Move within the current level                                |
+| `→`               | Step in: categories → settings                               |
+| `←`               | Step out: settings → categories, or close an open value list |
+| `Enter` / `Space` | Open the selected setting, or flip a switch                  |
+| `Esc`             | Close the settings screen                                    |
+
+Nothing is changed by moving over it. A setting with more than two values --
+theme, keymap, line numbers, any number -- opens a list, and only `Enter` or
+`Space` in that list applies the value. (Stepping a value in place meant
+walking to `vim` applied `helix` on the way, which is a good way to lose the
+keys you were navigating with.)
+
+**The theme previews as you move through its list**, so you can see each one
+before committing, and `←`/`Esc` puts the old one back. No other list previews.
+
+A change takes effect immediately **and** is written to your `config.toml` --
+comments and key order in that file are preserved, only the key you changed is
+rewritten. Rows marked `*` are read once at startup, so they are saved but need
+a restart to take effect.
+
+To rebind a command, select it and press `Enter`, then type the keys and press
+`Enter` again -- multi-key chords like `g g` work, and `Esc` cancels (which is
+why `Esc` itself cannot be bound from this screen). Bindings are written to
+`keybindings.toml`, into the same section the command already lives in. That
+file maps a key to a command and has no way to say "this key should stop
+working", so a new binding is _added_ alongside any the keymap already gave the
+command; the row lists all of them.
+
 ## Configuration
 
 termcode stores all user data under `~/.config/termcode/`:
@@ -228,59 +278,85 @@ termcode stores all user data under `~/.config/termcode/`:
   sessions/            # auto-saved sessions
 ```
 
-Config is loaded from (in order):
+Config is read from one file:
 
-1. `~/.config/termcode/config.toml` -- user config
-2. `./config/config.toml` -- project-local override
+1. `./config/config.toml` -- if a project-local config exists, it is used
+2. `~/.config/termcode/config.toml` -- otherwise
+
+The project-local file **replaces** the user config rather than merging into it,
+so it has to be complete. Settings saved from the `F2` screen are written back
+to whichever of the two was loaded.
 
 ### config.toml
 
 ```toml
+theme = "one-dark"
+
 [editor]
 tab_size = 4
 insert_spaces = true
-word_wrap = false
-line_numbers = "relative"     # "absolute", "relative", "relative_absolute", "none"
+line_numbers = "absolute"     # "absolute", "relative", "relative_absolute", "none"
 scroll_off = 5
 mouse_enabled = true
-auto_save = false
-auto_save_delay_ms = 1000
 
 [ui]
 sidebar_width = 30
 sidebar_visible = true
-show_tab_bar = true
-show_top_bar = true
+tree_style = true             # tree lines in the file explorer
+show_file_type_emoji = true
+respect_gitignore = true
 
-[lsp.rust]
+[keymap]
+# preset = "vim"              # "vscode", "vim", "helix"; omit for the built-in keymap
+chord_timeout_ms = 1000       # gap allowed between the keys of a chord
+
+[plugins]
+enabled = true
+
+[[lsp]]
+language = "rust"
 command = "rust-analyzer"
 args = []
 
-[lsp.python]
+[[lsp]]
+language = "python"
 command = "pyright-langserver"
 args = ["--stdio"]
 ```
 
 ### keybindings.toml
 
+Sections are `[global]` plus one per mode: `[mode.normal]`, `[mode.insert]`,
+`[mode.file_explorer]`, `[mode.search]`, `[mode.fuzzy_finder]`,
+`[mode.command_palette]` and `[mode.settings]`. Mode bindings win over global
+ones, and the overlay modes do not consult `[global]` at all.
+
 ```toml
-[normal]
-"ctrl+p" = "fuzzy_finder.open"
+[global]
+"ctrl+p" = "fuzzy.open"
 "ctrl+f" = "search.open"
 
-[edit]
-"ctrl+space" = "completion.trigger"
+[mode.insert]
+"ctrl+space" = "lsp.trigger_completion"
+
+[mode.normal]
+"g g" = "cursor.home"         # multi-key chords are written with spaces
 ```
+
+Command IDs are listed in the command palette (`Ctrl+Shift+P`) and on the
+Keybindings page of the settings screen. Unknown IDs are logged and skipped.
 
 ## Themes
 
-Ships with **3 built-in themes**:
+Ships with **4 built-in themes**:
 
 - **One Dark** (default)
 - **Gruvbox Dark**
 - **Catppuccin Mocha**
+- **Lazygit**
 
-Switch themes via the command palette (`Ctrl+Shift+P` > Themes).
+Switch themes from the command palette (`Ctrl+Shift+P` > **Select Theme**) for
+this session, or from [Settings](#settings) (`F2`) to save the choice as well.
 
 ### Custom Themes
 
@@ -325,15 +401,19 @@ termcode supports **Lua plugins** for extending editor functionality.
 ```lua
 -- ~/.config/termcode/plugins/hello/init.lua
 
-plugin.register_command("hello.greet", "Say hello", function()
+plugin.register_command("greet", "Say hello", function()
     local name = editor.get_filename() or "world"
     editor.set_status("Hello, " .. name .. "!")
 end)
 
-hooks.on_save = function(event)
-    log.info("Saved: " .. (event.filename or "unknown"))
-end
+plugin.on("on_save", function(ctx)
+    log.info("Saved: " .. (ctx.filename or "unknown"))
+end)
 ```
+
+A registered command is exposed in the palette as `plugin.<plugin-name>.<name>`,
+so the one above is `plugin.hello.greet`. See `runtime/plugins/example/` for a
+working plugin.
 
 ## Architecture
 
@@ -356,7 +436,7 @@ termcode is built as **8 modular crates** with strict dependency layers:
 | **termcode-core**   | Buffer (Rope), Position, Selection, Transaction, History   |
 | **termcode-theme**  | Theme loading, color resolution, syntax scope mapping      |
 | **termcode-syntax** | Tree-sitter integration, language registry                 |
-| **termcode-config** | TOML config & keybinding loading                           |
+| **termcode-config** | TOML config & keybinding loading, and saving them back     |
 | **termcode-view**   | Editor state, Document, View, commands (frontend-agnostic) |
 | **termcode-lsp**    | LSP client, JSON-RPC transport, capability negotiation     |
 | **termcode-plugin** | Lua plugin runtime, hook system, editor API bindings       |

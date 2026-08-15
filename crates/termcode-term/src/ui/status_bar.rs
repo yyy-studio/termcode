@@ -62,6 +62,7 @@ impl Widget for StatusBarWidget<'_> {
             EditorMode::Search => (" SEARCH ", Color::Rgb(229, 192, 123)),
             EditorMode::FuzzyFinder => (" FINDER ", Color::Rgb(198, 120, 221)),
             EditorMode::CommandPalette => (" COMMAND ", Color::Rgb(198, 120, 221)),
+            EditorMode::Settings => (" SETTINGS ", Color::Rgb(86, 182, 194)),
         };
         let mode_style = Style::default().fg(Color::Rgb(40, 44, 52)).bg(mode_bg);
 

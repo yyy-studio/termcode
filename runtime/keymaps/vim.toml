@@ -17,6 +17,7 @@ description = "Vim-style modal keymap with multi-key sequences (gg, dd, yy, gd).
 [global]
 "ctrl+s" = "file.save"
 "f1" = "help.toggle"
+"f2" = "settings.open"
 
 [mode.normal]
 # Motions
@@ -75,6 +76,7 @@ description = "Vim-style modal keymap with multi-key sequences (gg, dd, yy, gd).
 "shift+?" = "help.toggle"
 "space p" = "fuzzy.open"
 "space f" = "fuzzy.open"
+"space s" = "settings.open"
 
 # LSP, mirroring Vim/LSP-plugin conventions
 "g d" = "goto.definition"
@@ -144,3 +146,17 @@ description = "Vim-style modal keymap with multi-key sequences (gg, dd, yy, gd).
 "ctrl+n" = "palette.down"
 "ctrl+k" = "palette.up"
 "ctrl+j" = "palette.down"
+
+[mode.settings]
+"esc" = "settings.close"
+"up" = "settings.up"
+"down" = "settings.down"
+"left" = "settings.focus_out"
+"right" = "settings.focus_in"
+"enter" = "settings.activate"
+"space" = "settings.activate"
+"tab" = "settings.toggle_focus"
+"pageup" = "settings.page_up"
+"pagedown" = "settings.page_down"
+"ctrl+k" = "settings.up"
+"ctrl+j" = "settings.down"

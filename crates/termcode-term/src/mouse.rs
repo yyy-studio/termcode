@@ -11,6 +11,7 @@ pub enum MouseAction {
     None,
     OpenExplorerItem(usize),
     SwitchTab(usize),
+    OpenSettings,
 }
 
 /// Handle a mouse event, dispatching based on which layout region was clicked.
@@ -42,13 +43,15 @@ fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) ->
         return MouseAction::None;
     }
 
-    // Help button in top bar (right-aligned)
+    // Buttons in the top bar (right-aligned)
     if rect_contains(&layout.top_bar, x, y) {
-        let btn_start = (layout.top_bar.x + layout.top_bar.width)
-            .saturating_sub(crate::ui::top_bar::HELP_BUTTON_WIDTH);
-        if x >= btn_start {
+        let buttons = crate::ui::top_bar::buttons(layout.top_bar);
+        if x >= buttons.help_start {
             editor.help_visible = !editor.help_visible;
             return MouseAction::None;
+        }
+        if buttons.settings_start.is_some_and(|start| x >= start) {
+            return MouseAction::OpenSettings;
         }
     }
 
@@ -391,6 +394,41 @@ mod tests {
             editor_area: Rect::new(20, 2, 60, 21),
             status_bar: Rect::new(0, 23, 80, 1),
         }
+    }
+
+    #[test]
+    fn click_on_the_top_bar_buttons_hits_the_right_one() {
+        let layout = layout_with_title();
+        let buttons = crate::ui::top_bar::buttons(layout.top_bar);
+        let settings_start = buttons.settings_start.expect("80 columns fits both");
+
+        let mut editor = make_editor();
+        assert!(matches!(
+            handle_left_click(&mut editor, buttons.help_start, 0, &layout),
+            MouseAction::None
+        ));
+        assert!(editor.help_visible, "help button must toggle the popup");
+
+        // The click lands on the Settings button, but App is what opens the
+        // screen -- the editor is untouched here.
+        let mut editor = make_editor();
+        assert!(matches!(
+            handle_left_click(&mut editor, settings_start, 0, &layout),
+            MouseAction::OpenSettings
+        ));
+        assert!(matches!(
+            handle_left_click(&mut editor, buttons.help_start - 1, 0, &layout),
+            MouseAction::OpenSettings
+        ));
+        assert!(!editor.help_visible);
+
+        // One column left of Settings is the title, which does nothing.
+        let mut editor = make_editor();
+        assert!(matches!(
+            handle_left_click(&mut editor, settings_start - 1, 0, &layout),
+            MouseAction::None
+        ));
+        assert!(!editor.help_visible);
     }
 
     #[test]
