@@ -118,6 +118,9 @@ description = "Helix-style modal keymap built around the Space leader and g/[/] 
 "left" = "explorer.collapse"
 "r" = "explorer.refresh"
 "shift+r" = "explorer.refresh_all"
+"n" = "explorer.new_file"
+"shift+n" = "explorer.new_folder"
+"y" = "explorer.copy_path"
 "esc" = "mode.normal"
 "tab" = "mode.normal"
 

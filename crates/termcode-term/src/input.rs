@@ -180,6 +180,9 @@ impl InputMapper {
             (key(none, KeyCode::Left), "explorer.collapse"),
             (key(none, KeyCode::Char('r')), "explorer.refresh"),
             (key(shift, KeyCode::Char('R')), "explorer.refresh_all"),
+            (key(none, KeyCode::Char('n')), "explorer.new_file"),
+            (key(shift, KeyCode::Char('N')), "explorer.new_folder"),
+            (key(none, KeyCode::Char('y')), "explorer.copy_path"),
             (key(none, KeyCode::Esc), "mode.normal"),
             (key(none, KeyCode::Tab), "mode.normal"),
         ];

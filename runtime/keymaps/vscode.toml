@@ -18,6 +18,9 @@ initial_mode = "insert"
 [global]
 "ctrl+s" = "file.save"
 "ctrl+w" = "tab.close"
+# Ctrl+Q also quits without this line -- `handle_key` intercepts it before any
+# keymap -- but binding it puts quit in the help popup and the settings screen.
+"ctrl+q" = "app.quit"
 "ctrl+b" = "view.toggle_sidebar"
 "alt+b" = "view.toggle_sidebar"
 "ctrl+p" = "fuzzy.open"
@@ -92,6 +95,9 @@ initial_mode = "insert"
 "left" = "explorer.collapse"
 "f5" = "explorer.refresh"
 "shift+f5" = "explorer.refresh_all"
+"ctrl+n" = "explorer.new_file"
+"ctrl+shift+n" = "explorer.new_folder"
+"ctrl+c" = "explorer.copy_path"
 "esc" = "mode.normal"
 "tab" = "mode.normal"
 

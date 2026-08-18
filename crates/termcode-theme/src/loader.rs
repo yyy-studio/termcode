@@ -39,6 +39,10 @@ struct IconsDef {
     file_default: Option<String>,
     #[serde(default)]
     extensions: HashMap<String, String>,
+    new_file: Option<String>,
+    new_folder: Option<String>,
+    refresh: Option<String>,
+    copy_path: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -172,6 +176,18 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
     }
     if let Some(v) = file.icons.file_default {
         icons.file_default = v;
+    }
+    if let Some(v) = file.icons.new_file {
+        icons.new_file = v;
+    }
+    if let Some(v) = file.icons.new_folder {
+        icons.new_folder = v;
+    }
+    if let Some(v) = file.icons.refresh {
+        icons.refresh = v;
+    }
+    if let Some(v) = file.icons.copy_path {
+        icons.copy_path = v;
     }
     for (ext, icon) in file.icons.extensions {
         icons.extensions.insert(ext, icon);

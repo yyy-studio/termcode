@@ -5,7 +5,7 @@ use ratatui::widgets::Widget;
 
 use termcode_core::config_types::FileTreeStyle;
 use termcode_theme::theme::Theme;
-use termcode_view::file_explorer::{FileExplorer, FileNodeKind};
+use termcode_view::file_explorer::{FileExplorer, FileNode, FileNodeKind, NewEntryKind};
 
 pub struct FileExplorerWidget<'a> {
     explorer: &'a FileExplorer,
@@ -46,6 +46,33 @@ fn blend_color(
         }
         _ => fg,
     }
+}
+
+/// Logical column a row's icon starts at: what the tree lines or the plain
+/// indentation take up. The tree prefix is four width-1 characters per level.
+pub fn indent_width(node: &FileNode, style: &FileTreeStyle) -> u16 {
+    let per_level = if style.tree_style { 4 } else { 2 };
+    (node.depth * per_level) as u16
+}
+
+/// Logical columns `[start, end)` of the expand/collapse chevron on a
+/// directory's row, or `None` where there is nothing to click: a file, the
+/// `..` row, or a tree drawn without icons.
+///
+/// This is the single source of the chevron's position, shared by the widget
+/// below and `mouse.rs`.
+pub fn chevron_span(node: &FileNode, style: &FileTreeStyle, theme: &Theme) -> Option<(u16, u16)> {
+    if !style.show_file_type_emoji || node.kind != FileNodeKind::Directory || node.is_parent {
+        return None;
+    }
+    let icon = if node.expanded {
+        &theme.icons.directory_open
+    } else {
+        &theme.icons.directory_closed
+    };
+    let start = indent_width(node, style);
+    let width = unicode_width::UnicodeWidthStr::width(icon.as_str()) as u16;
+    Some((start, start + width))
 }
 
 /// Check if node at `index` is the last sibling at its depth level.
@@ -145,12 +172,73 @@ impl Widget for FileExplorerWidget<'_> {
                 logical_x + w
             };
 
-        for (vi, node) in nodes.iter().enumerate().skip(offset) {
-            let row = (vi - offset) as u16;
+        // A new file or directory being named occupies a row of its own, drawn
+        // where the entry will land once it exists.
+        let input = self.explorer.new_entry.as_ref();
+        let mut rows: Vec<Option<usize>> = Vec::with_capacity(nodes.len() + 1);
+        for i in 0..nodes.len() {
+            if input.is_some_and(|inp| inp.row == i) {
+                rows.push(None);
+            }
+            rows.push(Some(i));
+        }
+        if input.is_some_and(|inp| inp.row >= nodes.len()) {
+            rows.push(None);
+        }
+
+        let cursor_style = Style::default().fg(bg).bg(fg);
+
+        for (ri, row_kind) in rows.iter().enumerate().skip(offset) {
+            let row = (ri - offset) as u16;
             let y = area.y + row;
             if y >= area.y + area.height {
                 break;
             }
+
+            let vi = match row_kind {
+                Some(vi) => *vi,
+                None => {
+                    let Some(input) = input else { continue };
+                    let style = Style::default().fg(fg).bg(sel_bg);
+                    for x in area.x..area.x + area.width {
+                        buf[(x, y)].set_char(' ').set_style(style);
+                    }
+
+                    let mut lx: u16 = if use_tree {
+                        (input.depth * 4) as u16
+                    } else {
+                        (input.depth * 2) as u16
+                    };
+
+                    if use_emoji {
+                        let icons = &self.theme.icons;
+                        let icon_str = match input.kind {
+                            NewEntryKind::Directory => &icons.directory_closed,
+                            NewEntryKind::File => icons.file_icon(&input.name),
+                        };
+                        let icon = format!("{icon_str} ");
+                        for ch in icon.chars() {
+                            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
+                            lx = put_char(lx, ch, w, style, y, buf);
+                        }
+                    }
+
+                    for (i, ch) in input.name.chars().enumerate() {
+                        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
+                        let ch_style = if i == input.cursor {
+                            cursor_style
+                        } else {
+                            style
+                        };
+                        lx = put_char(lx, ch, w, ch_style, y, buf);
+                    }
+                    if input.cursor >= input.name.chars().count() {
+                        put_char(lx, ' ', 1, cursor_style, y, buf);
+                    }
+                    continue;
+                }
+            };
+            let node = &nodes[vi];
 
             let style = if vi == self.explorer.selected {
                 Style::default().fg(fg).bg(sel_bg)
@@ -169,11 +257,16 @@ impl Widget for FileExplorerWidget<'_> {
 
             if use_tree {
                 let prefix = build_tree_prefix(nodes, vi);
+                debug_assert_eq!(
+                    prefix.chars().count() as u16,
+                    indent_width(node, &self.file_tree_style),
+                    "the chevron hit-test assumes four columns per tree level"
+                );
                 for ch in prefix.chars() {
                     lx = put_char(lx, ch, 1, style, y, buf);
                 }
             } else {
-                lx += (node.depth * 2) as u16;
+                lx += indent_width(node, &self.file_tree_style);
             }
 
             if use_emoji {
@@ -221,5 +314,61 @@ impl Widget for FileExplorerWidget<'_> {
                 lx = put_char(lx, ch, w, style, y, buf);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termcode_view::file_explorer::FileNode;
+
+    fn node(kind: FileNodeKind, depth: usize, expanded: bool, is_parent: bool) -> FileNode {
+        FileNode {
+            path: std::path::PathBuf::from("x"),
+            name: "x".to_string(),
+            kind,
+            depth,
+            expanded,
+            is_parent,
+        }
+    }
+
+    #[test]
+    fn the_chevron_sits_after_the_indent_and_only_on_a_real_directory() {
+        let theme = Theme::default();
+        let style = FileTreeStyle {
+            tree_style: false,
+            show_file_type_emoji: true,
+            ..FileTreeStyle::default()
+        };
+        // Theme::default()'s folder icons are emoji: two columns wide.
+        let dir = node(FileNodeKind::Directory, 2, false, false);
+        assert_eq!(chevron_span(&dir, &style, &theme), Some((4, 6)));
+
+        assert_eq!(
+            chevron_span(&node(FileNodeKind::File, 0, false, false), &style, &theme),
+            None
+        );
+        assert_eq!(
+            chevron_span(
+                &node(FileNodeKind::Directory, 0, false, true),
+                &style,
+                &theme
+            ),
+            None,
+            "`..` re-roots the tree; it has nothing to expand"
+        );
+
+        let no_icons = FileTreeStyle {
+            show_file_type_emoji: false,
+            ..style
+        };
+        assert_eq!(chevron_span(&dir, &no_icons, &theme), None);
+
+        let tree_lines = FileTreeStyle {
+            tree_style: true,
+            ..style
+        };
+        assert_eq!(chevron_span(&dir, &tree_lines, &theme), Some((8, 10)));
     }
 }

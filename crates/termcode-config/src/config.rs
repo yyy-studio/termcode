@@ -69,7 +69,8 @@ impl Default for PluginConfig {
 #[serde(default)]
 pub struct KeymapConfig {
     /// Name of a preset in `runtime/keymaps/<name>.toml`. `None` keeps the
-    /// built-in hybrid keymap, so existing configs are unaffected.
+    /// built-in hybrid keymap; the default is `vscode`, so an editor with no
+    /// config behaves like the editor most users arrive from.
     pub preset: Option<String>,
     /// How long an incomplete multi-key sequence stays pending, in milliseconds.
     pub chord_timeout_ms: u64,
@@ -78,7 +79,7 @@ pub struct KeymapConfig {
 impl Default for KeymapConfig {
     fn default() -> Self {
         Self {
-            preset: None,
+            preset: Some("vscode".to_string()),
             chord_timeout_ms: 1000,
         }
     }

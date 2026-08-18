@@ -3,8 +3,14 @@ use ratatui::widgets::{Block, Borders};
 use termcode_theme::theme::PaneFocusStyle;
 
 pub struct AppLayout {
+    /// The whole frame. Overlays centre themselves in it rather than in any of
+    /// the regions below, so hit-testing one needs it too.
+    pub frame: Rect,
     pub top_bar: Rect,
     pub sidebar: Option<Rect>,
+    /// One row above the tree holding the project name and the explorer's
+    /// action buttons.
+    pub sidebar_toolbar: Option<Rect>,
     pub sidebar_title: Option<Rect>,
     pub sidebar_border: Option<Rect>,
     pub sidebar_panel: Option<Rect>,
@@ -123,14 +129,32 @@ pub fn compute_layout(
             (None, None, None, None, None, middle)
         };
 
+    // The toolbar takes the title row when there is one to take -- it carries
+    // the same focus styling, so nothing is lost by replacing " EXPLORER" with
+    // the project name and the buttons. The other focus styles have no such row
+    // and give up the tree's first line instead.
+    let (sidebar, sidebar_title, sidebar_toolbar) = match (sidebar, sidebar_title) {
+        (Some(sb), Some(title)) if pane_focus_style == PaneFocusStyle::TitleBar => {
+            (Some(sb), None, Some(title))
+        }
+        (Some(sb), title) if sb.height >= 2 => {
+            let toolbar = Rect::new(sb.x, sb.y, sb.width, 1);
+            let tree = Rect::new(sb.x, sb.y + 1, sb.width, sb.height - 1);
+            (Some(tree), title, Some(toolbar))
+        }
+        (sb, title) => (sb, title, None),
+    };
+
     let right_split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(right_panel);
 
     AppLayout {
+        frame: area,
         top_bar,
         sidebar,
+        sidebar_toolbar,
         sidebar_title,
         sidebar_border,
         sidebar_panel,
@@ -153,18 +177,42 @@ mod tests {
     fn title_bar_style_splits_sidebar() {
         let layout = compute_layout(area(), true, 20, PaneFocusStyle::TitleBar, false);
         let sidebar = layout.sidebar.unwrap();
-        let title = layout.sidebar_title.unwrap();
+        // The title row is where the explorer toolbar goes under this style.
+        let toolbar = layout.sidebar_toolbar.unwrap();
+        assert!(layout.sidebar_title.is_none());
         assert!(layout.sidebar_border.is_none());
-        assert_eq!(title.height, 1);
-        assert_eq!(title.width, 20);
-        assert_eq!(sidebar.y, title.y + 1);
+        assert_eq!(toolbar.height, 1);
+        assert_eq!(toolbar.width, 20);
+        assert_eq!(sidebar.y, toolbar.y + 1);
         assert_eq!(sidebar.height, area().height - 3);
+    }
+
+    #[test]
+    fn styles_without_a_title_row_give_the_toolbar_the_first_tree_line() {
+        for style in [PaneFocusStyle::Border, PaneFocusStyle::AccentLine] {
+            let layout = compute_layout(area(), true, 20, style, false);
+            let sidebar = layout.sidebar.unwrap();
+            let toolbar = layout.sidebar_toolbar.unwrap();
+            assert_eq!(toolbar.height, 1);
+            assert_eq!(sidebar.y, toolbar.y + 1);
+            assert_eq!(toolbar.width, sidebar.width);
+        }
+        // The accent line survives: it is not what the toolbar took.
+        let accent = compute_layout(area(), true, 20, PaneFocusStyle::AccentLine, false);
+        assert!(accent.sidebar_title.is_some());
+    }
+
+    #[test]
+    fn a_hidden_sidebar_has_no_toolbar() {
+        let layout = compute_layout(area(), false, 20, PaneFocusStyle::TitleBar, false);
+        assert!(layout.sidebar_toolbar.is_none());
     }
 
     #[test]
     fn border_style_splits_sidebar() {
         let layout = compute_layout(area(), true, 20, PaneFocusStyle::Border, false);
         let sidebar = layout.sidebar.unwrap();
+        let _ = layout.sidebar_toolbar.expect("toolbar row");
         let border = layout.sidebar_border.unwrap();
         assert!(layout.sidebar_title.is_none());
         assert_eq!(border.width, 1);
@@ -179,7 +227,8 @@ mod tests {
         let title = layout.sidebar_title.unwrap();
         assert!(layout.sidebar_border.is_none());
         assert_eq!(title.height, 1);
-        assert_eq!(sidebar.y, title.y + 1);
+        // Title row, then the toolbar, then the tree.
+        assert_eq!(sidebar.y, title.y + 2);
     }
 
     #[test]
@@ -207,8 +256,8 @@ mod tests {
         // Content areas are inset by 1 on each side
         let sidebar = layout.sidebar.unwrap();
         assert_eq!(sidebar.width, 18); // 20 - 2 borders
-        let title = layout.sidebar_title.unwrap();
-        assert_eq!(title.width, 18);
+        let toolbar = layout.sidebar_toolbar.unwrap();
+        assert_eq!(toolbar.width, 18);
         assert_eq!(layout.tab_bar.width, 58);
         assert_eq!(layout.editor_area.width, 58);
     }
