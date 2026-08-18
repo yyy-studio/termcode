@@ -280,19 +280,10 @@ impl Widget for EditorViewWidget<'_> {
                 if cursor_display_col >= left_col && cursor_display_col < visible_end {
                     let cursor_x = code_start + (cursor_display_col - left_col) as u16;
                     let cell = &mut buf[(cursor_x, y)];
-                    match self.mode {
-                        EditorMode::Normal
-                        | EditorMode::FileExplorer
-                        | EditorMode::Search
-                        | EditorMode::FuzzyFinder
-                        | EditorMode::CommandPalette
-                        | EditorMode::Settings => {
-                            cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-                        }
-                        EditorMode::Insert => {
-                            cell.set_style(cell.style().add_modifier(Modifier::UNDERLINED));
-                        }
-                    }
+                    // The same filled block in every mode, Insert included: the
+                    // status bar already names the mode, and an underline is
+                    // easy to lose against the cursor line.
+                    cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
                 }
             }
 

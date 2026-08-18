@@ -16,6 +16,7 @@ use crate::ui::command_palette::CommandPaletteWidget;
 use crate::ui::completion::CompletionWidget;
 use crate::ui::confirm_dialog::ConfirmDialogWidget;
 use crate::ui::editor_view::EditorViewWidget;
+use crate::ui::explorer_toolbar::ExplorerToolbarWidget;
 use crate::ui::file_explorer::FileExplorerWidget;
 use crate::ui::fuzzy_finder::FuzzyFinderWidget;
 use crate::ui::help_popup::HelpPopupWidget;
@@ -72,6 +73,16 @@ pub fn render(
             editor.file_tree_style,
         );
         frame.render_widget(explorer_widget, sidebar_area);
+    }
+
+    if let Some(toolbar_area) = app_layout.sidebar_toolbar {
+        let toolbar = ExplorerToolbarWidget::new(
+            &editor.file_explorer,
+            &editor.theme,
+            is_sidebar_active,
+            editor.file_tree_style.show_file_type_emoji,
+        );
+        frame.render_widget(toolbar, toolbar_area);
     }
 
     if let Some(title_area) = app_layout.sidebar_title {

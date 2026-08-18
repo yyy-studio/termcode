@@ -10,12 +10,34 @@ use crate::layout::AppLayout;
 pub enum MouseAction {
     None,
     OpenExplorerItem(usize),
+    /// Expand or collapse the tree row, from a click on its chevron.
+    ToggleExplorerExpand(usize),
     SwitchTab(usize),
     OpenSettings,
+    /// An explorer toolbar button, named by its command without the
+    /// `explorer.` prefix.
+    ExplorerCommand(&'static str),
+    /// The top bar's Exit button. Quitting is `App`'s to do: unsaved documents
+    /// have to be confirmed first.
+    Quit,
+    /// A click on a confirm dialog button, which is already selected by the
+    /// time this is returned. Running the action is `App`'s job.
+    ConfirmSelected,
 }
 
 /// Handle a mouse event, dispatching based on which layout region was clicked.
 pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) -> MouseAction {
+    // The confirm dialog is modal: nothing behind it can be clicked or
+    // scrolled, exactly as no key reaches past it.
+    if editor.confirm_dialog.is_some() {
+        return match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                handle_confirm_click(editor, event.column, event.row, layout.frame)
+            }
+            _ => MouseAction::None,
+        };
+    }
+
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             handle_left_click(editor, event.column, event.row, layout)
@@ -36,6 +58,39 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
     }
 }
 
+/// A click while the confirm dialog is open. Only its buttons do anything;
+/// dismissing it is `Esc`'s job, so a stray click cannot discard the choice.
+///
+/// The first click moves the focus, the second runs the focused button -- the
+/// same select-then-act the tree uses. Discarding unsaved work is not something
+/// a single misplaced click should be able to do.
+fn handle_confirm_click(
+    editor: &mut Editor,
+    x: u16,
+    y: u16,
+    frame: ratatui::layout::Rect,
+) -> MouseAction {
+    let button = editor
+        .confirm_dialog
+        .as_ref()
+        .and_then(|dialog| crate::ui::confirm_dialog::layout(dialog, frame))
+        .and_then(|placed| placed.button_at(x, y));
+
+    let Some(index) = button else {
+        return MouseAction::None;
+    };
+    let Some(dialog) = editor.confirm_dialog.as_mut() else {
+        return MouseAction::None;
+    };
+    let already_focused = dialog.selected_button == index;
+    dialog.selected_button = index;
+    if already_focused {
+        MouseAction::ConfirmSelected
+    } else {
+        MouseAction::None
+    }
+}
+
 fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) -> MouseAction {
     // Help popup: any click dismisses it
     if editor.help_visible {
@@ -46,12 +101,27 @@ fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) ->
     // Buttons in the top bar (right-aligned)
     if rect_contains(&layout.top_bar, x, y) {
         let buttons = crate::ui::top_bar::buttons(layout.top_bar);
-        if x >= buttons.help_start {
-            editor.help_visible = !editor.help_visible;
-            return MouseAction::None;
+        if x >= buttons.exit_start {
+            return MouseAction::Quit;
         }
         if buttons.settings_start.is_some_and(|start| x >= start) {
             return MouseAction::OpenSettings;
+        }
+    }
+
+    if let Some(toolbar) = layout.sidebar_toolbar {
+        if rect_contains(&toolbar, x, y) {
+            // The buttons act on the tree, so the tree is what the click
+            // focuses -- including when it lands on the project name.
+            editor.switch_mode(EditorMode::FileExplorer);
+            let labels = crate::ui::explorer_toolbar::ToolbarLabels::resolve(
+                &editor.theme,
+                editor.file_tree_style.show_file_type_emoji,
+            );
+            if let Some(action) = crate::ui::explorer_toolbar::action_at(toolbar, &labels, x) {
+                return MouseAction::ExplorerCommand(action.command());
+            }
+            return MouseAction::None;
         }
     }
 
@@ -168,10 +238,13 @@ fn handle_line_number_click(editor: &mut Editor, y: u16, editor_area: &ratatui::
 
 fn handle_sidebar_click(
     editor: &mut Editor,
-    _x: u16,
+    x: u16,
     y: u16,
     sidebar: &ratatui::layout::Rect,
 ) -> MouseAction {
+    // A click picks a row, and the pending new-entry row would shift every
+    // index below it. Clicking away from a half-typed name drops it.
+    editor.file_explorer.cancel_new_entry();
     let row_offset = (y - sidebar.y) as usize;
     let target_index = editor.file_explorer.scroll_offset + row_offset;
 
@@ -182,6 +255,19 @@ fn handle_sidebar_click(
     let already_selected = editor.file_explorer.selected == target_index;
     editor.file_explorer.selected = target_index;
     editor.switch_mode(EditorMode::FileExplorer);
+
+    // The chevron is a control rather than part of the entry: one click on it
+    // expands the directory in place, where a double click on the name would
+    // re-root the tree there.
+    let logical_x = (x - sidebar.x) + editor.file_explorer.scroll_left;
+    let span = crate::ui::file_explorer::chevron_span(
+        &editor.file_explorer.tree[target_index],
+        &editor.file_tree_style,
+        &editor.theme,
+    );
+    if span.is_some_and(|(start, end)| logical_x >= start && logical_x < end) {
+        return MouseAction::ToggleExplorerExpand(target_index);
+    }
 
     // First click selects, second click on same item opens
     if already_selected {
@@ -370,8 +456,10 @@ mod tests {
 
     fn layout_with_title() -> AppLayout {
         AppLayout {
+            frame: Rect::new(0, 0, 80, 24),
             top_bar: Rect::new(0, 0, 80, 1),
             sidebar: Some(Rect::new(0, 2, 20, 21)),
+            sidebar_toolbar: None,
             sidebar_title: Some(Rect::new(0, 1, 20, 1)),
             sidebar_border: None,
             sidebar_panel: None,
@@ -384,8 +472,10 @@ mod tests {
 
     fn layout_with_border() -> AppLayout {
         AppLayout {
+            frame: Rect::new(0, 0, 80, 24),
             top_bar: Rect::new(0, 0, 80, 1),
-            sidebar: Some(Rect::new(0, 1, 19, 22)),
+            sidebar: Some(Rect::new(0, 2, 19, 21)),
+            sidebar_toolbar: Some(Rect::new(0, 1, 19, 1)),
             sidebar_title: None,
             sidebar_border: Some(Rect::new(19, 1, 1, 22)),
             sidebar_panel: None,
@@ -402,12 +492,12 @@ mod tests {
         let buttons = crate::ui::top_bar::buttons(layout.top_bar);
         let settings_start = buttons.settings_start.expect("80 columns fits both");
 
+        // Exit only asks; App decides, since unsaved files need confirming.
         let mut editor = make_editor();
         assert!(matches!(
-            handle_left_click(&mut editor, buttons.help_start, 0, &layout),
-            MouseAction::None
+            handle_left_click(&mut editor, buttons.exit_start, 0, &layout),
+            MouseAction::Quit
         ));
-        assert!(editor.help_visible, "help button must toggle the popup");
 
         // The click lands on the Settings button, but App is what opens the
         // screen -- the editor is untouched here.
@@ -417,10 +507,9 @@ mod tests {
             MouseAction::OpenSettings
         ));
         assert!(matches!(
-            handle_left_click(&mut editor, buttons.help_start - 1, 0, &layout),
+            handle_left_click(&mut editor, buttons.exit_start - 1, 0, &layout),
             MouseAction::OpenSettings
         ));
-        assert!(!editor.help_visible);
 
         // One column left of Settings is the title, which does nothing.
         let mut editor = make_editor();
@@ -429,6 +518,176 @@ mod tests {
             MouseAction::None
         ));
         assert!(!editor.help_visible);
+    }
+
+    #[test]
+    fn click_on_a_toolbar_button_runs_its_explorer_command() {
+        let layout = layout_with_border();
+        let toolbar = layout.sidebar_toolbar.unwrap();
+        let labels = crate::ui::explorer_toolbar::ToolbarLabels::resolve(
+            &make_editor().theme,
+            termcode_core::config_types::FileTreeStyle::default().show_file_type_emoji,
+        );
+        let placed = crate::ui::explorer_toolbar::buttons(toolbar, &labels);
+        assert!(!placed.is_empty(), "19 columns should fit some buttons");
+
+        for (action, start) in placed {
+            let mut editor = make_editor();
+            editor.switch_mode(EditorMode::Normal);
+            let result = handle_left_click(&mut editor, start, toolbar.y, &layout);
+            match result {
+                MouseAction::ExplorerCommand(cmd) => assert_eq!(cmd, action.command()),
+                _ => panic!("{action:?} did not dispatch"),
+            }
+            assert_eq!(editor.mode, EditorMode::FileExplorer);
+        }
+    }
+
+    #[test]
+    fn click_on_the_toolbar_beside_the_buttons_only_focuses_the_explorer() {
+        let layout = layout_with_border();
+        let toolbar = layout.sidebar_toolbar.unwrap();
+        let mut editor = make_editor();
+        editor.switch_mode(EditorMode::Normal);
+        assert!(matches!(
+            handle_left_click(&mut editor, toolbar.x, toolbar.y, &layout),
+            MouseAction::None
+        ));
+        assert_eq!(editor.mode, EditorMode::FileExplorer);
+    }
+
+    #[test]
+    fn click_on_the_chevron_expands_and_a_click_on_the_name_does_not() {
+        use termcode_view::file_explorer::FileNodeKind;
+
+        let layout = layout_with_border();
+        let sidebar = layout.sidebar.unwrap();
+        let mut editor = make_editor();
+        let index = editor
+            .file_explorer
+            .tree
+            .iter()
+            .position(|n| n.kind == FileNodeKind::Directory && !n.is_parent)
+            .expect("the crate directory has subdirectories");
+        let (start, end) = crate::ui::file_explorer::chevron_span(
+            &editor.file_explorer.tree[index],
+            &editor.file_tree_style,
+            &editor.theme,
+        )
+        .expect("icons are on by default");
+        let row = sidebar.y + index as u16;
+
+        // On the chevron: expand, on the first click, without opening anything.
+        assert!(matches!(
+            handle_left_click(&mut editor, sidebar.x + start, row, &layout),
+            MouseAction::ToggleExplorerExpand(i) if i == index
+        ));
+
+        // On the name: the usual select-then-open, which for a directory
+        // re-roots the tree.
+        let name_x = sidebar.x + end + 1;
+        let mut editor = make_editor();
+        assert!(matches!(
+            handle_left_click(&mut editor, name_x, row, &layout),
+            MouseAction::None
+        ));
+        assert_eq!(editor.file_explorer.selected, index);
+        assert!(matches!(
+            handle_left_click(&mut editor, name_x, row, &layout),
+            MouseAction::OpenExplorerItem(i) if i == index
+        ));
+    }
+
+    #[test]
+    fn the_parent_row_has_no_chevron_to_click() {
+        let layout = layout_with_border();
+        let sidebar = layout.sidebar.unwrap();
+        let mut editor = make_editor();
+        assert!(
+            editor.file_explorer.tree[0].is_parent,
+            "the crate directory has a parent"
+        );
+
+        // Every column of the `..` row selects it, then opens it -- there is no
+        // chevron to swallow the click.
+        for _ in 0..2 {
+            let action = handle_left_click(&mut editor, sidebar.x, sidebar.y, &layout);
+            assert!(matches!(
+                action,
+                MouseAction::None | MouseAction::OpenExplorerItem(0)
+            ));
+        }
+        assert_eq!(editor.file_explorer.selected, 0);
+    }
+
+    #[test]
+    fn a_confirm_button_takes_the_focus_first_and_runs_on_the_second_click() {
+        use termcode_view::confirm::{ConfirmAction, ConfirmDialog};
+
+        let layout = layout_with_title();
+        let mut editor = make_editor();
+        let dialog = ConfirmDialog::new(
+            ConfirmAction::QuitAll,
+            "You have 1 unsaved file(s).".to_string(),
+            vec!["Save".to_string(), "Discard".to_string()],
+        );
+        let placed = crate::ui::confirm_dialog::layout(&dialog, layout.frame).unwrap();
+        editor.confirm_dialog = Some(dialog);
+
+        let (start, _) = placed.buttons[1];
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start,
+            row: placed.button_y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        // Button 1 is not the focused one, so the first click only moves focus.
+        assert!(matches!(
+            handle_mouse(&mut editor, event, &layout),
+            MouseAction::None
+        ));
+        assert_eq!(editor.confirm_dialog.as_ref().unwrap().selected_button, 1);
+
+        assert!(matches!(
+            handle_mouse(&mut editor, event, &layout),
+            MouseAction::ConfirmSelected
+        ));
+        assert_eq!(
+            editor.confirm_dialog.as_ref().unwrap().selected_button,
+            1,
+            "the clicked button is the one that runs"
+        );
+    }
+
+    #[test]
+    fn the_confirm_dialog_swallows_clicks_that_miss_its_buttons() {
+        use termcode_view::confirm::{ConfirmAction, ConfirmDialog};
+
+        let layout = layout_with_title();
+        let mut editor = make_editor();
+        editor.confirm_dialog = Some(ConfirmDialog::new(
+            ConfirmAction::QuitAll,
+            "You have 1 unsaved file(s).".to_string(),
+            vec!["Save".to_string(), "Cancel".to_string()],
+        ));
+
+        // The Exit button is behind the dialog and must not be reachable.
+        let buttons = crate::ui::top_bar::buttons(layout.top_bar);
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: buttons.exit_start,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        assert!(matches!(
+            handle_mouse(&mut editor, event, &layout),
+            MouseAction::None
+        ));
+        assert!(
+            editor.confirm_dialog.is_some(),
+            "a stray click must not dismiss the dialog"
+        );
     }
 
     #[test]

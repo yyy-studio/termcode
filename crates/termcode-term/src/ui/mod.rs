@@ -2,6 +2,7 @@ pub mod command_palette;
 pub mod completion;
 pub mod confirm_dialog;
 pub mod editor_view;
+pub mod explorer_toolbar;
 pub mod file_explorer;
 pub mod fuzzy_finder;
 pub mod help_popup;

@@ -108,6 +108,7 @@ impl Editor {
             viewport_height: 0,
             scroll_left: 0,
             respect_gitignore: true,
+            new_entry: None,
         });
 
         Self {
@@ -178,12 +179,19 @@ impl Editor {
     }
 
     pub fn switch_mode(&mut self, mode: EditorMode) {
+        // A half-typed entry name belongs to the tree the user was looking at;
+        // leaving the explorer drops it rather than leaving a row behind that
+        // no key path still feeds.
+        if mode != EditorMode::FileExplorer {
+            self.file_explorer.cancel_new_entry();
+        }
         self.mode = mode;
     }
 
     /// Return to the resting mode (see [`Editor::default_mode`]). Insert is only
     /// honoured when there is a document to type into.
     pub fn switch_to_default_mode(&mut self) {
+        self.file_explorer.cancel_new_entry();
         self.mode = if self.default_mode == EditorMode::Insert && self.active_view.is_none() {
             EditorMode::Normal
         } else {

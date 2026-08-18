@@ -86,6 +86,13 @@ pub struct Icons {
     pub file_default: String,
     /// Extension -> icon mapping (e.g., "rs" -> "🦀")
     pub extensions: HashMap<String, String>,
+    /// Explorer toolbar buttons. Emoji rather than the more obvious symbol
+    /// glyphs (⚙ ⟳ ⎘): those are East Asian Ambiguous, so terminals disagree
+    /// about their width and the header shifts under them.
+    pub new_file: String,
+    pub new_folder: String,
+    pub refresh: String,
+    pub copy_path: String,
 }
 
 impl Default for Icons {
@@ -186,6 +193,10 @@ impl Default for Icons {
             directory_closed: "📁".to_string(),
             file_default: "📄".to_string(),
             extensions,
+            new_file: "📄".to_string(),
+            new_folder: "📁".to_string(),
+            refresh: "🔄".to_string(),
+            copy_path: "📋".to_string(),
         }
     }
 }

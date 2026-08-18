@@ -83,7 +83,7 @@ LspBridge (tokio runtime) → mpsc::UnboundedSender<AppEvent::Lsp>
 
 Seven modes: `Normal`, `Insert`, `FileExplorer`, `Search`, `FuzzyFinder`, `CommandPalette`, `Settings`. Mode determines which keybindings are active in `InputMapper`. The `CommandPalette` has sub-modes via `PaletteMode` enum (`Commands`, `Themes`, `Keymaps`).
 
-Adding a mode touches every exhaustive `match` on it: `InputMapper::mode_table`/`tables`, `mode_section_name`, `ModeBindings` (config), `mode_to_string` (plugin API), the status bar, and the cursor style in `editor_view.rs`.
+Adding a mode touches every exhaustive `match` on it: `InputMapper::mode_table`/`tables`, `mode_section_name`, `ModeBindings` (config), `mode_to_string` (plugin API), and the status bar. The cursor is a filled block in every mode -- `editor_view.rs` does not branch on the mode for it.
 
 ### Adding a New Command
 
@@ -125,7 +125,7 @@ Images open in tabs alongside text documents via `TabContent::Image(ImageId)`. F
 ### Adding a New Theme
 
 1. Create `runtime/themes/my-theme.toml` following the structure in `one-dark.toml`
-2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides)
+2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides, plus the explorer toolbar's `new_file`/`new_folder`/`refresh`/`copy_path` glyphs)
 3. Theme is automatically discovered by `list_available_themes()` scanning `runtime/themes/`
 
 ### Keymap Presets
@@ -167,6 +167,11 @@ and **replaces** the built-in map entirely; `keybindings.toml` overrides then
 apply on top. Both paths go through `build_input_mapper()` in `app.rs`, which is
 called twice: once at startup and again after plugin commands register, so a
 keymap can bind them.
+
+The default preset is `vscode` (`KeymapConfig::default`), so an editor with no
+config file is modeless. An **empty** `preset = ""` is what selects the built-in
+hybrid keymap: omitting the key means the default, so the settings screen writes
+the empty string there rather than removing the key.
 
 `Ctrl+Q` stays hardcoded in `handle_key()` as an escape hatch that no keymap can
 remove.
@@ -300,6 +305,88 @@ than no row.
 ### File Explorer
 
 Tree-based with lazy expansion. Uses `ignore::WalkBuilder` for `.gitignore`-aware traversal. `FileNode` tracks kind (File/Directory/Symlink), depth, and expanded state. `toggle_expand()` inserts/removes children inline; `refresh()` preserves existing expansion state.
+
+The sidebar's first row is the explorer toolbar (`ui/explorer_toolbar.rs`): the
+project name plus the New File / New Folder / Refresh / Copy Path buttons. Under
+`pane_focus_style = "title_bar"` it takes over the pane title row -- it carries
+the same focus styling, so nothing is lost -- and under the other styles it
+takes the tree's first line. Buttons are dropped from the left as the sidebar
+narrows, and `explorer_toolbar::buttons()` is the single source of their
+positions, shared by the widget and `mouse.rs`.
+
+The button glyphs are the theme's `[icons]` `new_file` / `new_folder` /
+`refresh` / `copy_path` (default 📄 📁 🔄 📋). They are emoji rather than the
+more obvious symbols (⚙ ⟳ ⎘) because emoji are East Asian **Wide** -- exactly
+two columns in every terminal -- while those symbols are Ambiguous and would
+shift the whole header. `ToolbarLabels::resolve()` falls back to ASCII (`+F`,
+`+D`, `R`, `C`) when `ui.show_file_type_emoji` is off: a terminal that cannot
+draw the tree's icons cannot draw these either. Widths come from
+`unicode_width`, never `str::len`, and the widget blanks the cell a wide glyph
+covers (ratatui's diff skips it, so it is never emitted).
+
+Creating an entry is inline rather than a mode of its own: `FileExplorer.new_entry`
+holds a `NewEntryInput` (kind, parent directory, tree row, depth, name, cursor)
+and the tree draws it as an extra row where the entry will land. While it is
+open, `App::handle_key` routes every key to `handle_new_entry_key` before the
+keymap sees it, so a name may contain letters the explorer binds (`n`, `y`,
+...). `Enter` commits, `Esc` cancels, and leaving the explorer (`switch_mode`,
+`switch_to_default_mode`, a click in the tree) drops the half-typed name --
+nothing else feeds that row. `commit_new_entry()` rejects an empty name, one
+that escapes the parent (`..`, an absolute path) and one that already exists,
+keeping the row open so the name can be corrected. A new file is opened in a tab
+straight away; a new directory leaves focus in the tree.
+
+The tree's first node is a `..` row (`FileNode::is_parent`), unless the root is
+the filesystem root and has no parent. It is a real node so selection,
+scrolling and mouse hit-testing stay plain row indices, and `is_parent` keeps it
+out of everything that would treat it as the directory it points at:
+`toggle_expand` and `refresh_node` ignore it, `new_entry_target` creates in the
+current root instead, and `selected_path()` returns `None` there so
+`explorer.copy_path` has nothing to copy. Enter (and Right) on it calls
+`navigate_to_parent()`, which re-roots the tree one level up and selects the
+directory it came out of. It absolutises the root first (`std::path::absolute`,
+not `canonicalize`, so symlinks stay unresolved): the editor is usually opened
+on `.`, and `Path::new(".").parent()` is the empty path, which lists nothing.
+
+Enter and the arrow keys do different things to a directory: Right expands it in
+place, keeping it inside the tree it belongs to, while Enter *enters* it --
+`navigate_into()` makes it the root. The mouse splits the row the same way: a
+single click on the `▶`/`▼` chevron expands (`MouseAction::ToggleExplorerExpand`),
+a double click anywhere else re-roots. `ui::file_explorer::chevron_span()` is the
+single source of the chevron's columns, shared by the widget and `mouse.rs`, and
+returns `None` where there is nothing to click -- a file, the `..` row, or
+`show_file_type_emoji = false`. Hit-testing is in *logical* columns
+(`x - sidebar.x + scroll_left`), since the tree scrolls horizontally. Both re-rootings go through `set_root()`,
+which drops the old tree wholesale (its expansion state belongs to paths at a
+different depth) and lands the selection on the first real entry rather than on
+the `..` row, so Enter does not bounce straight back out. Re-rooting moves what
+the fuzzy finder and the toolbar's project name follow; it does not touch the
+LSP root, nor the session, which is keyed on `App.session_root` captured at
+startup so walking the root around cannot move where it is written.
+
+`explorer.copy_path` puts the selected entry's absolute path on the system
+clipboard. The path is joined with the working directory rather than
+canonicalised, so symlinks stay unresolved and Windows' verbatim `\\?\` prefix
+never appears.
+
+### Confirm Dialog
+
+The unsaved-changes dialog (`ConfirmAction::CloseTab` / `QuitAll`) is modal for
+the mouse as well as the keyboard: `mouse::handle_mouse` answers clicks on its
+buttons and swallows everything else, so nothing behind it can be clicked or
+scrolled while it is up. A button is clicked twice: the first click moves the
+focus to it, the second runs it (`MouseAction::ConfirmSelected` ->
+`execute_confirm_action`) -- the same select-then-act as the tree, because
+discarding unsaved work should not be one misplaced click away. A click that
+misses does nothing, since dismissing is `Esc`'s job and a stray click must not
+discard the choice.
+
+`ui::confirm_dialog::layout()` is the single source of the dialog's geometry --
+the popup rect, the button row, and each button's columns -- shared by the
+widget and `mouse.rs`. It centres itself in the whole frame, which is why
+`AppLayout` carries `frame`. It returns `None` for an area too small to draw in,
+and the widget then draws nothing, so there is never a button to click that was
+not rendered.
 
 ### CI & Release
 

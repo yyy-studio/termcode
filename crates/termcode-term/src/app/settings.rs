@@ -585,16 +585,16 @@ fn section_mode(section: &str) -> Option<EditorMode> {
 
 /// Write a setting to `config.toml`.
 ///
-/// Selecting the built-in keymap removes `[keymap] preset` rather than writing
-/// a name for it: `"(built-in)"` is a label for "no preset", not a file that
-/// could be loaded on the next start.
+/// Selecting the built-in keymap writes an empty `[keymap] preset` rather than
+/// the label: `"(built-in)"` is not a file that could be loaded on the next
+/// start, and *removing* the key would fall back to the default preset instead.
 fn persist_config_value(
     config_path: &Path,
     keys: &[&str],
     value: &SettingValue,
 ) -> anyhow::Result<()> {
     if keys == ["keymap", "preset"] && value.display() == BUILTIN_KEYMAP {
-        return writer::remove_value(config_path, keys);
+        return writer::set_value(config_path, keys, toml_edit::Value::from(""));
     }
     let toml_value = match value {
         SettingValue::Bool(flag) => toml_edit::Value::from(*flag),
@@ -824,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_the_builtin_keymap_removes_the_preset_key() {
+    fn selecting_the_builtin_keymap_empties_the_preset_key() {
         let (mut app, config_path) = app_with_settings("builtin");
         std::fs::write(&config_path, "[keymap]\npreset = \"vim\"\n").unwrap();
         app.keymap_name = "vim".to_string();
@@ -842,7 +842,8 @@ mod tests {
         );
 
         let written = std::fs::read_to_string(&config_path).unwrap();
-        assert!(!written.contains("preset"), "{written}");
+        // Empty, not absent: an absent key means "the default preset".
+        assert!(written.contains(r#"preset = """#), "{written}");
         assert_eq!(app.editor.mode, EditorMode::Settings, "must stay open");
     }
 

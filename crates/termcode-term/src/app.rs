@@ -21,7 +21,7 @@ use termcode_syntax::language::LanguageRegistry;
 use termcode_theme::loader::parse_theme;
 use termcode_theme::theme::Theme;
 use termcode_view::editor::{Editor, EditorMode};
-use termcode_view::file_explorer::FileNodeKind;
+use termcode_view::file_explorer::{FileNodeKind, NewEntryKind};
 
 use termcode_view::palette::{PaletteItem, PaletteMode};
 
@@ -82,6 +82,9 @@ pub struct App {
     keymap_name: String,
     /// Keys pressed so far while the settings screen is capturing a rebinding.
     settings_capture: Vec<KeyEvent>,
+    /// Directory the editor was opened on. The session is keyed on it rather
+    /// than on the explorer's root, which the `..` row can walk elsewhere.
+    session_root: PathBuf,
     /// How long a partially typed chord stays pending before it is abandoned.
     chord_timeout: Duration,
     /// When the current pending chord started, for the timeout above.
@@ -133,6 +136,9 @@ impl App {
             lang_registry.load_queries(&dir);
         }
         let mut editor = Editor::new(theme, config, lang_registry, root);
+        // Captured before anything can move the explorer's root, so the session
+        // is written back to the directory the editor was opened on.
+        let session_root = editor.file_explorer.root.clone();
         editor.file_tree_style = app_config.ui.file_tree_style;
         editor.file_explorer.respect_gitignore = app_config.ui.file_tree_style.respect_gitignore;
         if !app_config.ui.file_tree_style.respect_gitignore {
@@ -157,7 +163,12 @@ impl App {
 
         // Read the preset once: the mapper is rebuilt after plugins register
         // their commands, and re-reading would repeat any parse warning.
-        let preset = match &app_config.keymap.preset {
+        let preset = match app_config
+            .keymap
+            .preset
+            .as_deref()
+            .filter(|n| !n.is_empty())
+        {
             Some(name) => match termcode_config::keymap::load_keymap_preset(name) {
                 Some(preset) => {
                     // The loader logs these too, but a half-bound keymap is
@@ -260,13 +271,17 @@ impl App {
             config_path: termcode_config::default::config_dir().join("config.toml"),
             keybindings_path,
             theme_name: startup_config.theme.clone(),
+            // An empty preset is how the settings screen records "no preset":
+            // the key has to be present, since a missing one is the default.
             keymap_name: startup_config
                 .keymap
                 .preset
                 .clone()
+                .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| BUILTIN_KEYMAP.to_string()),
             app_config: startup_config,
             settings_capture: Vec::new(),
+            session_root,
             chord_timeout: Duration::from_millis(app_config.keymap.chord_timeout_ms),
             chord_started: None,
         }
@@ -452,8 +467,7 @@ impl App {
     }
 
     pub fn restore_session(&mut self) {
-        let root = self.editor.file_explorer.root.clone();
-        if let Some(session) = crate::session::load_session(&root) {
+        if let Some(session) = crate::session::load_session(&self.session_root) {
             for file in &session.files {
                 if let Err(e) = self.open_file(&file.path) {
                     log::warn!("Session restore failed for {}: {e}", file.path.display());
@@ -472,7 +486,7 @@ impl App {
     }
 
     fn save_session(&self) {
-        let root = self.editor.file_explorer.root.clone();
+        let root = self.session_root.clone();
         let files: Vec<crate::session::SessionFile> = self
             .editor
             .tabs
@@ -525,9 +539,9 @@ impl App {
     }
 
     fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) {
-        if self.editor.confirm_dialog.is_some() {
-            return;
-        }
+        // The confirm dialog is not skipped here: `mouse::handle_mouse` keeps
+        // it modal and answers clicks on its buttons.
+        //
         // A click can move the cursor or change the mode, so a chord started
         // before it would complete against the wrong target.
         self.abandon_pending_chord();
@@ -552,11 +566,22 @@ impl App {
             MouseAction::OpenExplorerItem(_index) => {
                 self.handle_explorer_enter();
             }
+            MouseAction::ToggleExplorerExpand(index) => {
+                if let Err(e) = self.editor.file_explorer.toggle_expand(index) {
+                    self.editor.status_message = Some(format!("Error: {e}"));
+                }
+                self.editor
+                    .file_explorer
+                    .compute_scroll_left(&self.editor.file_tree_style);
+            }
             MouseAction::SwitchTab(index) => {
                 self.editor.tabs.set_active(index);
                 self.editor.sync_active_view_to_tab();
             }
             MouseAction::OpenSettings => self.open_settings(),
+            MouseAction::Quit => self.handle_quit(),
+            MouseAction::ConfirmSelected => self.execute_confirm_action(),
+            MouseAction::ExplorerCommand(command) => self.dispatch_explorer_command(command),
         }
     }
 
@@ -657,6 +682,16 @@ impl App {
         if self.editor.help_visible {
             // Any key closes help popup
             self.editor.help_visible = false;
+            return;
+        }
+
+        // A new entry being named owns every key while its row is open --
+        // otherwise a name could not contain a letter the explorer binds.
+        if self.editor.mode == EditorMode::FileExplorer
+            && self.editor.file_explorer.new_entry.is_some()
+        {
+            self.abandon_pending_chord();
+            self.handle_new_entry_key(key);
             return;
         }
 
@@ -1043,8 +1078,113 @@ impl App {
                     self.editor.status_message = Some(format!("Refresh failed: {e}"));
                 }
             }
+            "new_file" => self.begin_new_entry(NewEntryKind::File),
+            "new_folder" => self.begin_new_entry(NewEntryKind::Directory),
+            "copy_path" => self.copy_selected_path(),
             other => log::warn!("Unknown explorer command: explorer.{other}"),
         }
+    }
+
+    /// Open the inline row a new file or directory is named in.
+    ///
+    /// The explorer takes focus first: the row is fed by `handle_new_entry_key`,
+    /// which only runs in `FileExplorer` mode, so a button click from the editor
+    /// would otherwise leave a row nothing types into.
+    fn begin_new_entry(&mut self, kind: NewEntryKind) {
+        self.editor.switch_mode(EditorMode::FileExplorer);
+        self.editor.file_explorer.begin_new_entry(kind);
+        self.editor.status_message = Some(format!(
+            "{}: type a name, Enter to create, Esc to cancel",
+            kind.prompt()
+        ));
+    }
+
+    /// Feed one key to the inline new-entry row.
+    fn handle_new_entry_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.editor.file_explorer.cancel_new_entry();
+                self.editor.status_message = Some("Cancelled".to_string());
+                return;
+            }
+            KeyCode::Enter => {
+                self.commit_new_entry();
+                return;
+            }
+            _ => {}
+        }
+
+        let Some(input) = self.editor.file_explorer.new_entry.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Backspace => input.backspace(),
+            KeyCode::Delete => input.delete(),
+            KeyCode::Left => input.move_left(),
+            KeyCode::Right => input.move_right(),
+            KeyCode::Home => input.move_home(),
+            KeyCode::End => input.move_end(),
+            _ => {
+                if let Some(c) = Self::typed_char(&key) {
+                    input.insert_char(c);
+                }
+            }
+        }
+    }
+
+    /// Create the entry the inline row names. A new file is opened straight
+    /// away, since naming one is how a user asks to start writing it.
+    fn commit_new_entry(&mut self) {
+        let kind = self
+            .editor
+            .file_explorer
+            .new_entry
+            .as_ref()
+            .map(|input| input.kind);
+        match self.editor.file_explorer.commit_new_entry() {
+            Ok(path) => {
+                self.editor.status_message = Some(format!("Created: {}", path.display()));
+                if kind == Some(NewEntryKind::File) {
+                    self.open_file_from_overlay(&path);
+                    self.editor.switch_to_default_mode();
+                }
+            }
+            // The row stays open on failure, with the name still in it.
+            Err(e) => self.editor.status_message = Some(format!("{e}")),
+        }
+    }
+
+    /// Put the selected entry's absolute path on the system clipboard.
+    fn copy_selected_path(&mut self) {
+        let Some(path) = self
+            .editor
+            .file_explorer
+            .selected_path()
+            .map(Path::to_path_buf)
+        else {
+            self.editor.status_message = Some("Nothing selected".to_string());
+            return;
+        };
+        // Joined with the working directory rather than canonicalised: a path
+        // to paste elsewhere should not have symlinks resolved out of it, nor
+        // carry Windows' verbatim `\\?\` prefix.
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&path))
+                .unwrap_or(path)
+        };
+        let text = absolute.display().to_string();
+
+        let Some(clipboard) = self.editor.clipboard.as_mut() else {
+            self.editor.status_message = Some("Clipboard unavailable".to_string());
+            return;
+        };
+        self.editor.status_message = Some(match clipboard.set_text(&text) {
+            Ok(()) => format!("Copied path: {text}"),
+            Err(e) => format!("Clipboard error: {e}"),
+        });
     }
 
     fn dispatch_plugin_hook(&mut self, hook: HookEvent) {
@@ -1770,14 +1910,9 @@ impl App {
 
         let kind = self.editor.file_explorer.tree[selected].kind;
         match kind {
-            FileNodeKind::Directory => {
-                if let Err(e) = self.editor.file_explorer.toggle_expand(selected) {
-                    self.editor.status_message = Some(format!("Error: {e}"));
-                }
-                self.editor
-                    .file_explorer
-                    .compute_scroll_left(&self.editor.file_tree_style);
-            }
+            // Enter *enters*: the directory becomes the root, where the arrow
+            // keys expand it inside the tree it is already part of.
+            FileNodeKind::Directory => self.navigate_explorer_into(selected),
             FileNodeKind::File | FileNodeKind::Symlink => {
                 let path = self.editor.file_explorer.tree[selected].path.clone();
                 self.open_file_from_overlay(&path);
@@ -1789,6 +1924,10 @@ impl App {
     fn handle_explorer_expand(&mut self) {
         let selected = self.editor.file_explorer.selected;
         if selected >= self.editor.file_explorer.tree.len() {
+            return;
+        }
+        if self.editor.file_explorer.tree[selected].is_parent {
+            self.navigate_explorer_to_parent();
             return;
         }
         let node = &self.editor.file_explorer.tree[selected];
@@ -1819,7 +1958,9 @@ impl App {
             let current_depth = node.depth;
             if current_depth > 0 {
                 for i in (0..selected).rev() {
-                    if self.editor.file_explorer.tree[i].depth < current_depth {
+                    if self.editor.file_explorer.tree[i].depth < current_depth
+                        && !self.editor.file_explorer.tree[i].is_parent
+                    {
                         self.editor.file_explorer.selected = i;
                         let vh = self.editor.file_explorer.viewport_height;
                         self.editor.file_explorer.ensure_visible(vh);
@@ -1828,6 +1969,28 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Re-root the tree one level up, from the `..` row.
+    fn navigate_explorer_to_parent(&mut self) {
+        if let Err(e) = self.editor.file_explorer.navigate_to_parent() {
+            self.editor.status_message = Some(format!("Error: {e}"));
+            return;
+        }
+        self.editor
+            .file_explorer
+            .compute_scroll_left(&self.editor.file_tree_style);
+    }
+
+    /// Re-root the tree at the directory on row `index`.
+    fn navigate_explorer_into(&mut self, index: usize) {
+        if let Err(e) = self.editor.file_explorer.navigate_into(index) {
+            self.editor.status_message = Some(format!("Error: {e}"));
+            return;
+        }
+        self.editor
+            .file_explorer
+            .compute_scroll_left(&self.editor.file_tree_style);
     }
 
     // --- LSP lifecycle helpers ---
@@ -2297,7 +2460,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("termcode-app-test-{name}.txt"));
         std::fs::write(&path, "abc\n").unwrap();
 
-        let mut app = App::with_config(None, AppConfig::default());
+        // The built-in keymap: this is about recovering a dead Insert-mode
+        // chord, which needs a Normal mode to fall back to.
+        let mut config = AppConfig::default();
+        config.keymap.preset = None;
+        let mut app = App::with_config(None, config);
         app.open_file(&path).unwrap();
 
         let overrides: termcode_config::keymap::KeybindingConfig = toml::from_str(
@@ -2334,6 +2501,148 @@ mod tests {
             .buffer
             .text()
             .to_string()
+    }
+
+    /// An app rooted in an empty scratch directory, focused on the explorer.
+    fn app_on_empty_dir(name: &str) -> (App, TestDir) {
+        let dir = std::env::temp_dir().join(format!("termcode-app-explorer-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::with_config(Some(dir.clone()), AppConfig::default());
+        app.editor.switch_mode(EditorMode::FileExplorer);
+        (app, TestDir(dir))
+    }
+
+    struct TestDir(PathBuf);
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn naming_a_new_file_creates_it_and_opens_it() {
+        let (mut app, dir) = app_on_empty_dir("new-file");
+        app.dispatch_explorer_command("new_file");
+
+        // Every letter is part of the name -- `n` and `y` are explorer
+        // bindings, and must not run while the row is open.
+        type_str(&mut app, "notes.ny");
+        assert_eq!(
+            app.editor.file_explorer.new_entry.as_ref().unwrap().name,
+            "notes.ny"
+        );
+
+        app.handle_key(code(KeyCode::Enter));
+        let created = dir.0.join("notes.ny");
+        assert!(created.is_file(), "the file should exist on disk");
+        assert!(app.editor.file_explorer.new_entry.is_none());
+        assert_eq!(
+            app.editor.active_document().and_then(|d| d.path.clone()),
+            Some(created),
+            "a file is opened as soon as it is named"
+        );
+    }
+
+    #[test]
+    fn naming_a_new_folder_creates_it_and_leaves_the_explorer_focused() {
+        let (mut app, dir) = app_on_empty_dir("new-folder");
+        app.dispatch_explorer_command("new_folder");
+        type_str(&mut app, "src");
+        app.handle_key(code(KeyCode::Enter));
+
+        assert!(dir.0.join("src").is_dir());
+        assert_eq!(app.editor.mode, EditorMode::FileExplorer);
+        assert!(app.editor.tabs.tabs.is_empty(), "a folder opens no tab");
+    }
+
+    #[test]
+    fn esc_drops_the_name_without_creating_anything() {
+        let (mut app, dir) = app_on_empty_dir("cancel");
+        app.dispatch_explorer_command("new_file");
+        type_str(&mut app, "gone.rs");
+        app.handle_key(code(KeyCode::Esc));
+
+        assert!(app.editor.file_explorer.new_entry.is_none());
+        assert!(!dir.0.join("gone.rs").exists());
+        // Esc closed the row, not the explorer.
+        assert_eq!(app.editor.mode, EditorMode::FileExplorer);
+    }
+
+    #[test]
+    fn leaving_the_explorer_drops_a_half_typed_name() {
+        let (mut app, _dir) = app_on_empty_dir("leave");
+        app.dispatch_explorer_command("new_file");
+        type_str(&mut app, "half");
+        app.editor.switch_mode(EditorMode::Normal);
+        assert!(app.editor.file_explorer.new_entry.is_none());
+    }
+
+    #[test]
+    fn copying_a_path_needs_something_selected() {
+        let (mut app, _dir) = app_on_empty_dir("copy-empty");
+        app.dispatch_explorer_command("copy_path");
+        assert_eq!(
+            app.editor.status_message.as_deref(),
+            Some("Nothing selected")
+        );
+    }
+
+    #[test]
+    fn copying_a_path_puts_an_absolute_path_on_the_clipboard() {
+        let (mut app, dir) = app_on_empty_dir("copy");
+        app.editor.clipboard = Some(Box::new(crate::clipboard::MockClipboard::new()));
+        app.dispatch_explorer_command("new_folder");
+        type_str(&mut app, "src");
+        app.handle_key(code(KeyCode::Enter));
+
+        app.dispatch_explorer_command("copy_path");
+        let copied = app.editor.clipboard.as_mut().unwrap().get_text();
+        let expected = dir.0.join("src");
+        assert_eq!(
+            copied.as_deref(),
+            Some(expected.display().to_string().as_str())
+        );
+        assert!(expected.is_absolute());
+    }
+
+    #[test]
+    fn clicking_cancel_in_the_quit_dialog_keeps_the_editor_open() {
+        let (mut app, _f) = app_with_insert_chord("quit-dialog");
+        app.terminal_size = (80, 24);
+        // A modified document is what puts the dialog up in the first place.
+        app.handle_key(press('x'));
+        app.handle_quit();
+        let dialog = app
+            .editor
+            .confirm_dialog
+            .as_ref()
+            .expect("unsaved work must be confirmed");
+        let cancel = dialog.buttons.len() - 1;
+        let placed =
+            crate::ui::confirm_dialog::layout(dialog, ratatui::layout::Rect::new(0, 0, 80, 24))
+                .unwrap();
+        let (x, _) = placed.buttons[cancel];
+        let y = placed.button_y;
+
+        let click = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Cancel does not start focused, so the first click only moves to it.
+        app.handle_mouse(click);
+        assert!(app.editor.confirm_dialog.is_some(), "still deciding");
+        assert_eq!(
+            app.editor.confirm_dialog.as_ref().unwrap().selected_button,
+            cancel
+        );
+
+        app.handle_mouse(click);
+        assert!(app.editor.confirm_dialog.is_none(), "the dialog closed");
+        assert!(!app.should_quit, "Cancel must not quit");
     }
 
     #[test]
