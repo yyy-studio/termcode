@@ -129,6 +129,13 @@ pub struct FileExplorer {
     pub respect_gitignore: bool,
     /// Set while a new file or directory is being named inline in the tree.
     pub new_entry: Option<NewEntryInput>,
+    /// The sidebar width as it was when the divider between the sidebar and
+    /// the editor was pressed, held for as long as the drag lasts. A `Drag`
+    /// event carries no memory of where the drag began, so the press is what
+    /// has to be remembered; keeping the original width means a press that
+    /// never moved can be told from one that resized, and only the latter is
+    /// written back to the config file.
+    pub resizing: Option<u16>,
 }
 
 impl FileExplorer {
@@ -148,6 +155,7 @@ impl FileExplorer {
             scroll_left: 0,
             respect_gitignore,
             new_entry: None,
+            resizing: None,
         };
         explorer.load_children(&root, 0, 0)?;
         explorer.insert_parent_row();

@@ -23,6 +23,9 @@ pub enum MouseAction {
     /// A click on a confirm dialog button, which is already selected by the
     /// time this is returned. Running the action is `App`'s job.
     ConfirmSelected,
+    /// The sidebar divider was released after a drag that changed the width.
+    /// Writing it to the config file is `App`'s job.
+    SidebarResized(u16),
 }
 
 /// Handle a mouse event, dispatching based on which layout region was clicked.
@@ -40,6 +43,9 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
 
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            // A press starts from a clean slate: an `Up` lost outside the
+            // terminal would otherwise leave the divider stuck to the pointer.
+            editor.file_explorer.resizing = None;
             handle_left_click(editor, event.column, event.row, layout)
         }
         MouseEventKind::ScrollUp => {
@@ -53,6 +59,18 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
         MouseEventKind::Drag(MouseButton::Left) => {
             handle_drag(editor, event.column, event.row, layout);
             MouseAction::None
+        }
+        MouseEventKind::Up(MouseButton::Left) => end_sidebar_resize(editor),
+        _ => MouseAction::None,
+    }
+}
+
+/// Release the divider. Reports the new width only when the drag actually moved
+/// it, so a press that never turned into a drag does not rewrite the config.
+fn end_sidebar_resize(editor: &mut Editor) -> MouseAction {
+    match editor.file_explorer.resizing.take() {
+        Some(original) if original != editor.file_explorer.width => {
+            MouseAction::SidebarResized(editor.file_explorer.width)
         }
         _ => MouseAction::None,
     }
@@ -125,6 +143,17 @@ fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) ->
         }
     }
 
+    // The divider is the sidebar's last column, so it is tested before the
+    // regions that also contain it. A press only arms the drag; a click that
+    // never moves still focuses the tree, which is what that column did before.
+    if let Some(divider) = layout.sidebar_divider {
+        if rect_contains(&divider, x, y) {
+            editor.file_explorer.resizing = Some(editor.file_explorer.width);
+            editor.switch_mode(EditorMode::FileExplorer);
+            return MouseAction::None;
+        }
+    }
+
     if let Some(sidebar_title) = layout.sidebar_title {
         if rect_contains(&sidebar_title, x, y) {
             editor.switch_mode(EditorMode::FileExplorer);
@@ -153,6 +182,17 @@ fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) ->
     }
 
     MouseAction::None
+}
+
+/// Put the divider under the cursor: the column dragged to becomes the
+/// sidebar's last one, so the divider tracks the pointer without drifting.
+///
+/// The drag is not confined to the sidebar -- the pointer routinely runs past
+/// the bounds, and the clamp is what stops it rather than the event being
+/// dropped.
+fn resize_sidebar(editor: &mut Editor, x: u16, layout: &AppLayout) {
+    let width = x.saturating_sub(layout.frame.x).saturating_add(1);
+    editor.file_explorer.width = crate::layout::clamp_sidebar_width(width, layout.frame.width);
 }
 
 fn handle_editor_click(editor: &mut Editor, x: u16, y: u16, editor_area: &ratatui::layout::Rect) {
@@ -331,6 +371,11 @@ fn handle_scroll_down(editor: &mut Editor, _x: u16, _y: u16, _layout: &AppLayout
 }
 
 fn handle_drag(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) {
+    if editor.file_explorer.resizing.is_some() {
+        resize_sidebar(editor, x, layout);
+        return;
+    }
+
     if !rect_contains(&layout.editor_area, x, y) {
         return;
     }
@@ -462,6 +507,7 @@ mod tests {
             sidebar_toolbar: None,
             sidebar_title: Some(Rect::new(0, 1, 20, 1)),
             sidebar_border: None,
+            sidebar_divider: Some(Rect::new(19, 1, 1, 22)),
             sidebar_panel: None,
             editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
@@ -478,12 +524,113 @@ mod tests {
             sidebar_toolbar: Some(Rect::new(0, 1, 19, 1)),
             sidebar_title: None,
             sidebar_border: Some(Rect::new(19, 1, 1, 22)),
+            sidebar_divider: Some(Rect::new(19, 1, 1, 22)),
             sidebar_panel: None,
             editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
             editor_area: Rect::new(20, 2, 60, 21),
             status_bar: Rect::new(0, 23, 80, 1),
         }
+    }
+
+    fn mouse_at(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    fn press(x: u16, y: u16) -> MouseEvent {
+        mouse_at(MouseEventKind::Down(MouseButton::Left), x, y)
+    }
+
+    fn drag(x: u16, y: u16) -> MouseEvent {
+        mouse_at(MouseEventKind::Drag(MouseButton::Left), x, y)
+    }
+
+    fn release(x: u16, y: u16) -> MouseEvent {
+        mouse_at(MouseEventKind::Up(MouseButton::Left), x, y)
+    }
+
+    #[test]
+    fn dragging_the_divider_resizes_the_sidebar_and_reports_the_new_width() {
+        let mut editor = make_editor();
+        let layout = layout_with_title();
+        editor.file_explorer.width = 20;
+
+        handle_mouse(&mut editor, press(19, 5), &layout);
+        assert_eq!(editor.file_explorer.resizing, Some(20), "the drag is armed");
+
+        // The column dragged to becomes the sidebar's last one, so the divider
+        // sits under the pointer rather than drifting away from it.
+        handle_mouse(&mut editor, drag(34, 5), &layout);
+        assert_eq!(editor.file_explorer.width, 35);
+
+        let action = handle_mouse(&mut editor, release(34, 5), &layout);
+        assert!(matches!(action, MouseAction::SidebarResized(35)));
+        assert!(editor.file_explorer.resizing.is_none(), "the drag ended");
+    }
+
+    #[test]
+    fn a_press_on_the_divider_that_never_moves_writes_nothing() {
+        let mut editor = make_editor();
+        let layout = layout_with_title();
+        editor.file_explorer.width = 20;
+
+        handle_mouse(&mut editor, press(19, 5), &layout);
+        let action = handle_mouse(&mut editor, release(19, 5), &layout);
+
+        assert!(matches!(action, MouseAction::None), "nothing to save");
+        assert_eq!(editor.file_explorer.width, 20);
+        // The column focuses the tree as it did before it was also a handle.
+        assert_eq!(editor.mode, EditorMode::FileExplorer);
+    }
+
+    #[test]
+    fn the_drag_is_clamped_rather_than_dropped_when_it_leaves_the_sidebar() {
+        let mut editor = make_editor();
+        let layout = layout_with_title();
+        editor.file_explorer.width = 20;
+
+        handle_mouse(&mut editor, press(19, 5), &layout);
+        // Far right, past the frame: the editor keeps its columns.
+        handle_mouse(&mut editor, drag(79, 5), &layout);
+        assert_eq!(
+            editor.file_explorer.width,
+            crate::layout::clamp_sidebar_width(80, 80)
+        );
+        // Far left, into the first column: the sidebar keeps its minimum.
+        handle_mouse(&mut editor, drag(0, 5), &layout);
+        assert_eq!(editor.file_explorer.width, crate::layout::MIN_SIDEBAR_WIDTH);
+    }
+
+    #[test]
+    fn a_drag_that_did_not_start_on_the_divider_still_selects_text() {
+        let mut editor = make_editor();
+        let layout = layout_with_title();
+        editor.file_explorer.width = 20;
+
+        handle_mouse(&mut editor, press(40, 5), &layout);
+        handle_mouse(&mut editor, drag(50, 5), &layout);
+
+        assert_eq!(editor.file_explorer.width, 20, "the sidebar is untouched");
+    }
+
+    #[test]
+    fn a_new_press_clears_a_drag_whose_release_was_lost() {
+        let mut editor = make_editor();
+        let layout = layout_with_title();
+        editor.file_explorer.width = 20;
+        // As if the button had come up outside the terminal.
+        editor.file_explorer.resizing = Some(20);
+
+        handle_mouse(&mut editor, press(40, 5), &layout);
+        assert!(editor.file_explorer.resizing.is_none());
+
+        handle_mouse(&mut editor, drag(50, 5), &layout);
+        assert_eq!(editor.file_explorer.width, 20, "not stuck to the pointer");
     }
 
     #[test]

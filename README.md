@@ -169,7 +169,7 @@ syntax queries.
 | **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF                             |
 | **Lua plugins**         | Custom commands, editor API, hook system                                                     |
 | **Undo/Redo**           | Branching history with full transaction support                                              |
-| **Mouse support**       | Click, drag select, scroll wheel, tabs, top bar and explorer buttons, dialog buttons          |
+| **Mouse support**       | Click, drag select, scroll wheel, tabs, resizable sidebar, top bar and explorer buttons, dialog buttons |
 
 ### Under the Hood
 
@@ -276,6 +276,11 @@ tmux claims `Ctrl+B`.
 With the mouse: a click on the `▶`/`▼` chevron expands the directory in place, a
 double click on the name enters it, and the toolbar above the tree holds
 **New File / New Folder / Refresh / Copy Path**.
+
+Dragging the seam between the sidebar and the editor resizes the sidebar. The
+width stays between 10 and 80 columns and always leaves the editor 20, and the
+one it is let go at is written to `ui.sidebar_width` in the config file -- the
+same key the settings screen's **Sidebar Width** row writes.
 
 Under a modal preset the same actions are on `j` `k` `l` `h`, `n` `N`, `y` and
 `r` `R`.

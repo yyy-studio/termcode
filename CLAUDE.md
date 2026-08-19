@@ -364,6 +364,24 @@ the fuzzy finder and the toolbar's project name follow; it does not touch the
 LSP root, nor the session, which is keyed on `App.session_root` captured at
 startup so walking the root around cannot move where it is written.
 
+The seam between the sidebar and the editor is a drag handle.
+`AppLayout::sidebar_divider` is the single source of its columns -- always the
+sidebar's **last** column, whatever is drawn there (the panel border, the focus
+border, or plain tree padding), so one rule covers every `pane_focus_style` and
+`panel_borders` combination. `mouse.rs` tests it before the regions that also
+contain that column, which costs the last column of the tree its click-to-select
+under the styles that draw no border there.
+
+A `Drag` event says nothing about where the drag began, so the press is
+remembered in `FileExplorer.resizing` as the width at that moment. Keeping the
+*width* rather than a bool is what separates a press that resized from one that
+never moved: only the former returns `MouseAction::SidebarResized`, and only
+that writes `ui.sidebar_width` to the config file. A press always clears the
+field first, so an `Up` lost outside the terminal cannot leave the divider stuck
+to the pointer. The bounds live in `layout.rs` (`clamp_sidebar_width`) and are
+shared with the settings screen's `Sidebar Width` row, so neither path can
+produce a width the other rejects.
+
 `explorer.copy_path` puts the selected entry's absolute path on the system
 clipboard. The path is joined with the working directory rather than
 canonicalised, so symlinks stay unresolved and Windows' verbatim `\\?\` prefix

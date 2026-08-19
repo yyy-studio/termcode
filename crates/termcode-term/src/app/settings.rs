@@ -100,8 +100,8 @@ impl App {
                 "Sidebar Width",
                 SettingValue::Int {
                     value: self.editor.file_explorer.width as i64,
-                    min: 10,
-                    max: 80,
+                    min: crate::layout::MIN_SIDEBAR_WIDTH as i64,
+                    max: crate::layout::MAX_SIDEBAR_WIDTH as i64,
                     step: 1,
                 },
                 config_target(&["ui", "sidebar_width"]),
@@ -497,6 +497,25 @@ impl App {
 
     /// Apply the row the user just changed to the running editor, then write it
     /// to the config file.
+    /// Write a sidebar width that was dragged out with the mouse to the same
+    /// key the settings screen's `Sidebar Width` row writes, so the two agree
+    /// on where the value lives and neither is stale after the other ran.
+    pub(crate) fn persist_sidebar_width(&mut self, width: u16) {
+        let value = SettingValue::Int {
+            value: width as i64,
+            min: crate::layout::MIN_SIDEBAR_WIDTH as i64,
+            max: crate::layout::MAX_SIDEBAR_WIDTH as i64,
+            step: 1,
+        };
+        let keys = ["ui", "sidebar_width"];
+        self.editor.status_message = Some(
+            match persist_config_value(&self.config_path, &keys, &value) {
+                Ok(()) => format!("Sidebar width {width}"),
+                Err(e) => format!("Save failed: {e}"),
+            },
+        );
+    }
+
     fn apply_and_save_setting(&mut self, index: usize) {
         let Some(item) = self.editor.settings.items.get(index).cloned() else {
             return;
@@ -885,6 +904,39 @@ mod tests {
             },
             config_target(&["ui", "sidebar_width"]),
         )
+    }
+
+    #[test]
+    fn a_width_dragged_out_with_the_mouse_lands_in_the_config_file() {
+        let (mut app, config_path) = app_with_settings("mouse-resize");
+        app.terminal_size = (120, 24);
+        app.editor.file_explorer.visible = true;
+        app.editor.file_explorer.width = 30;
+
+        // The divider is the sidebar's last column; drag it eight to the right.
+        let at = |kind, x| crossterm::event::MouseEvent {
+            kind,
+            column: x,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        use crossterm::event::{MouseButton, MouseEventKind};
+        app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), 29));
+        app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), 37));
+        assert_eq!(app.editor.file_explorer.width, 38);
+        assert!(!config_path.exists(), "nothing is written mid-drag");
+
+        app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), 37));
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.contains("sidebar_width = 38"), "{written}");
+
+        // The settings row reads the same value, so the two paths agree.
+        app.reload_settings_items();
+        assert_eq!(
+            item_labelled(&app, "Sidebar Width").value.display(),
+            "38",
+            "the settings screen shows what the drag produced"
+        );
     }
 
     #[test]
