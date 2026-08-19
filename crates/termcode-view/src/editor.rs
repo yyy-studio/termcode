@@ -109,6 +109,7 @@ impl Editor {
             scroll_left: 0,
             respect_gitignore: true,
             new_entry: None,
+            resizing: None,
         });
 
         Self {
