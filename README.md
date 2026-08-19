@@ -220,6 +220,13 @@ shortcuts, ready to type. The built-in hybrid keymap (with a Normal mode) and
 the other presets are one line of config away -- see
 [Keymap Presets](#keymap-presets).
 
+Every keymap here replaces the whole map, so the tables below are per preset,
+not a common baseline with variations. For whichever one you are actually
+running, the editor itself is the reference: the **help popup** (`Alt+H` under
+the default preset, `F1` / `?` under the built-in one) and the **Keybindings
+page of [Settings](#settings)** (`F2`) both list the keys the *active* keymap
+binds, including anything your `keybindings.toml` added on top.
+
 ### Default keys (`vscode` preset)
 
 | Key                        | Action                          |
@@ -374,7 +381,9 @@ next key, measured from the last one. If the sequence is abandoned while you are
 typing — into the buffer, the search box, or the finder — the keys are entered as
 text rather than lost.
 
-All keybindings are customizable via `keybindings.toml`. See [Configuration](#configuration).
+All keybindings are customizable via `keybindings.toml`, which layers on top of
+whichever preset is active rather than replacing it. See
+[Configuration](#configuration).
 
 ## Settings
 
@@ -385,7 +394,7 @@ the command palette, for a screen that edits the configuration in place:
 | --------------- | ------------------------------------------------------------------------ |
 | **Appearance**  | Theme, keymap preset, sidebar visibility and width, file tree style      |
 | **Editor**      | Tab size, spaces vs tabs, line numbers, scroll-off, mouse, chord timeout |
-| **Keybindings** | Every command and the keys bound to it, rebindable in place              |
+| **Keybindings** | Every command and the keys the *active* keymap binds to it, rebindable in place |
 | **Plugins**     | Plugin on/off switches, and the configured LSP servers for reference     |
 
 The screen is three levels deep, and the arrows move between them:
@@ -411,6 +420,11 @@ A change takes effect immediately **and** is written to your `config.toml` --
 comments and key order in that file are preserved, only the key you changed is
 rewritten. Rows marked `*` are read once at startup, so they are saved but need
 a restart to take effect.
+
+The Keybindings page follows the keymap you are running, so it shows the
+`vscode` keys by default and a different set after switching preset. Switching
+preset replaces the whole list; your `keybindings.toml` overrides are re-applied
+on top of the new one, and the rows show them too.
 
 To rebind a command, select it and press `Enter`, then type the keys and press
 `Enter` again -- multi-key chords like `g g` work, and `Esc` cancels (which is
