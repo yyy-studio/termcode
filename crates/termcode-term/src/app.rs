@@ -47,6 +47,12 @@ mod settings;
 /// cannot clash with a preset discovered on disk.
 const BUILTIN_KEYMAP: &str = "(built-in)";
 
+/// How many already-queued events one iteration may take before it has to
+/// draw. High enough that a wheel flick's whole burst fits in a single frame,
+/// low enough that input arriving faster than it can be drawn still yields a
+/// picture rather than a frozen screen.
+const MAX_COALESCED_EVENTS: usize = 256;
+
 pub struct App {
     editor: Editor,
     event_handler: EventHandler,
@@ -378,21 +384,28 @@ impl App {
                     self.update(lsp_event);
                 }
 
-                let prev_mode = self.editor.mode;
-                let prev_active_tab = self.editor.tabs.active;
-                let prev_cursor = self
-                    .editor
-                    .active_view()
-                    .map(|v| (v.cursor.line, v.cursor.column));
-
                 let event = self.event_handler.next()?;
-                self.update(event);
+                self.process_event(event);
+
+                // Then everything else the terminal already has waiting, before
+                // drawing anything. A wheel flick arrives as one burst -- the
+                // momentum tail included -- and rendering each event of it in
+                // turn puts every later keystroke behind a queue of frames
+                // nobody was going to see. Nothing is dropped here; only the
+                // frames between the events are. The cap keeps an unbroken
+                // stream of input from starving the draw entirely.
+                let mut coalesced = 0;
+                while !self.should_quit && coalesced < MAX_COALESCED_EVENTS {
+                    let Some(event) = self.event_handler.try_next()? else {
+                        break;
+                    };
+                    self.process_event(event);
+                    coalesced += 1;
+                }
 
                 if self.should_quit {
                     break;
                 }
-
-                self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
 
                 {
                     let size = terminal.size()?;
@@ -1206,6 +1219,27 @@ impl App {
                 }
             }
         }
+    }
+
+    /// One event through `update`, followed by the hooks that watch for the
+    /// state it changed. The two are kept together so that coalescing a burst
+    /// still fires them per event: a plugin watching the cursor should see the
+    /// same sequence whether or not the frames in between were drawn.
+    fn process_event(&mut self, event: AppEvent) {
+        let prev_mode = self.editor.mode;
+        let prev_active_tab = self.editor.tabs.active;
+        let prev_cursor = self
+            .editor
+            .active_view()
+            .map(|v| (v.cursor.line, v.cursor.column));
+
+        self.update(event);
+
+        if self.should_quit {
+            return;
+        }
+
+        self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
     }
 
     fn dispatch_state_diff_hooks(
