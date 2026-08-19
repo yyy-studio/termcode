@@ -194,11 +194,22 @@ impl Widget for ExplorerToolbarWidget<'_> {
             .map(|(_, start)| start.saturating_sub(1))
             .unwrap_or(area.x + area.width);
 
-        for (x, ch) in (area.x..).zip(self.title().chars()) {
-            if x >= title_end {
+        // The project name is whatever the directory is called, so it may be
+        // CJK: step by the glyph's columns and blank the cell a wide one
+        // covers, as the buttons below do. A column per character would put
+        // the next character in a cell ratatui's diff skips, dropping every
+        // second one -- "한글폴더명" came out as "한폴명".
+        let mut x = area.x;
+        for ch in self.title().chars() {
+            let w = ch.width().unwrap_or(0) as u16;
+            if w == 0 || x + w > title_end {
                 break;
             }
             buf[(x, area.y)].set_char(ch).set_style(style);
+            for i in 1..w {
+                buf[(x + i, area.y)].set_char(' ').set_style(style);
+            }
+            x += w;
         }
 
         for (action, start) in buttons {
@@ -330,6 +341,20 @@ mod tests {
 
         let ascii_row = render_row(30, dir.to_str().unwrap(), false);
         assert!(ascii_row.ends_with(" +F  +D  R  C "), "got: {ascii_row:?}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_cjk_project_name_keeps_all_its_characters() {
+        let dir = std::env::temp_dir()
+            .join("termcode-tb-cjk")
+            .join("한글폴더명");
+        std::fs::create_dir_all(&dir).unwrap();
+        let row = render_row(30, dir.to_str().unwrap(), true);
+        // Read the way the terminal does, every second character used to be
+        // written into a cell the diff skips.
+        assert!(row.starts_with(" 한글폴더명"), "got: {row:?}");
+        assert_eq!(row.width(), 30, "got: {row:?}");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 

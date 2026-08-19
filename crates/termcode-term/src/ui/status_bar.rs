@@ -128,11 +128,22 @@ impl Widget for StatusBarWidget<'_> {
             "termcode".to_string()
         };
 
+        // A file name may be CJK, so advance by columns rather than by
+        // characters and blank the cell a wide glyph covers -- ratatui's diff
+        // skips that cell, so a character written into it never appears.
         for ch in left_text.chars() {
-            if x_offset < area.x + area.width {
-                buf[(x_offset, area.y)].set_char(ch).set_style(style);
+            let w = crate::display_width::char_display_width(ch) as u16;
+            if w == 0 {
+                continue;
             }
-            x_offset += 1;
+            if x_offset + w > area.x + area.width {
+                break;
+            }
+            buf[(x_offset, area.y)].set_char(ch).set_style(style);
+            for i in 1..w {
+                buf[(x_offset + i, area.y)].set_char(' ').set_style(style);
+            }
+            x_offset += w;
         }
 
         // Right side: cursor position, encoding, language (or image info)
@@ -198,5 +209,49 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Read a rendered row the way the terminal does: the cell a wide glyph
+    /// covers is skipped by ratatui's diff, whatever it holds.
+    fn row_of(buf: &Buffer, width: u16) -> String {
+        let mut row = String::new();
+        let mut covered = 0usize;
+        for x in 0..width {
+            if covered > 0 {
+                covered -= 1;
+                continue;
+            }
+            let symbol = buf[(x, 0)].symbol();
+            covered = symbol.width().saturating_sub(1);
+            row.push_str(symbol);
+        }
+        row
+    }
+
+    #[test]
+    fn a_cjk_status_message_keeps_all_its_characters() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        StatusBarWidget::new(
+            None,
+            None,
+            &theme,
+            Some("한글폴더명"),
+            EditorMode::Normal,
+            None,
+            "",
+        )
+        .render(area, &mut buf);
+
+        let row = row_of(&buf, area.width);
+        assert!(row.contains("한글폴더명"), "got: {row:?}");
+        assert_eq!(row.width(), 40, "got: {row:?}");
     }
 }
