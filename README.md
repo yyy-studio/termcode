@@ -37,13 +37,76 @@
 
 ## Installation
 
-### Quick install (recommended)
+termcode is a single binary plus a `runtime/` directory (themes, keymaps,
+plugins, tree-sitter queries). Both are in every release archive; the binary
+looks for `runtime/` next to itself first, then in your config directory.
+
+### macOS / Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yyy-studio/termcode/main/install.sh | sh
 ```
 
-Automatically detects your platform, downloads the latest release, and installs to `~/.local/bin/`.
+The installer detects your platform, downloads the latest release, and puts
+
+| What            | Where                        |
+| --------------- | ---------------------------- |
+| Binary          | `~/.local/bin/termcode`      |
+| Runtime         | `~/.config/termcode/runtime/` |
+| Config          | `~/.config/termcode/config.toml` |
+
+On a **first** install it asks a few questions (theme, tab size, line numbers,
+mouse, sidebar, tree style, icons, `.gitignore`) and writes the answers to
+`config.toml`. On a re-install your existing config is left alone and only the
+binary and runtime are replaced.
+
+If `~/.local/bin` is not on your `PATH`, the installer says so; add it to your
+shell profile:
+
+```bash
+export PATH="${HOME}/.local/bin:${PATH}"
+```
+
+On macOS the installer also clears the quarantine attribute and ad-hoc signs the
+binary, so Gatekeeper does not block it. If you install manually instead, do the
+same:
+
+```bash
+xattr -c ./termcode && codesign --force --sign - ./termcode
+```
+
+`curl` and `tar` are the only requirements. Linux binaries are glibc builds
+(`*-unknown-linux-gnu`); on a musl-only distro such as Alpine, build from source.
+
+### Windows
+
+There is no install script. Download
+`termcode-x86_64-pc-windows-msvc.zip` from
+[Releases](https://github.com/yyy-studio/termcode/releases), then:
+
+```powershell
+# Unpacks to %LOCALAPPDATA%\Programs\termcode-x86_64-pc-windows-msvc\
+Expand-Archive termcode-x86_64-pc-windows-msvc.zip -DestinationPath "$env:LOCALAPPDATA\Programs"
+```
+
+Keep `termcode.exe` and the `runtime/` folder **side by side** -- that is the
+first place the binary looks. Then add the folder to your `PATH`:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  "$env:Path;$env:LOCALAPPDATA\Programs\termcode-x86_64-pc-windows-msvc",
+  "User")
+```
+
+Config lives in `%APPDATA%\termcode\` (`config.toml`, `keybindings.toml`,
+`themes\`, `plugins\`), and there is no interactive setup -- write
+`config.toml` yourself from the example under [Configuration](#configuration),
+or change settings in the app with `F2`.
+
+**Windows Terminal is recommended.** The classic console host handles emoji and
+true color poorly; if the file tree icons look misaligned, set
+`show_file_type_emoji = false` under `[ui]` for an ASCII tree.
 
 ### Pre-built binaries
 
@@ -57,7 +120,12 @@ Download from [GitHub Releases](https://github.com/yyy-studio/termcode/releases)
 | Linux (ARM64)         | `termcode-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows (x86_64)      | `termcode-x86_64-pc-windows-msvc.zip`       |
 
+Each archive contains the binary and a `runtime/` directory. Unpacked together,
+they run from anywhere -- no installer needed.
+
 ### From source (requires Rust 1.85+)
+
+Works on all three platforms:
 
 ```bash
 git clone https://github.com/yyy-studio/termcode.git
@@ -65,26 +133,43 @@ cd termcode
 cargo install --path .
 ```
 
+`cargo install` copies only the binary, so point termcode at the runtime as
+well -- copy the repository's `runtime/` next to the installed binary, or into
+your config directory:
+
+```bash
+# macOS / Linux
+mkdir -p ~/.config/termcode && cp -r runtime ~/.config/termcode/
+```
+
+```powershell
+# Windows
+Copy-Item -Recurse runtime "$env:APPDATA\termcode\runtime"
+```
+
+Without it the editor still starts, but ships no themes, keymap presets or
+syntax queries.
+
 ## Features
 
 ### Editor
 
 | Feature                 | Details                                                                                      |
 | ----------------------- | -------------------------------------------------------------------------------------------- |
-| **Modal editing**       | 7 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette, Settings      |
+| **Modal editing**       | 7 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette, Settings; the default keymap is modeless |
 | **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, HTML, CSS, Bash, TOML, JSON, Markdown |
 | **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics                            |
 | **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring                                             |
 | **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all                          |
-| **Command palette**     | `Ctrl+Shift+P` -- searchable command list, plus theme and keymap switchers                   |
+| **Command palette**     | `F1` / `Alt+X` -- searchable command list, plus theme and keymap switchers                   |
 | **Settings screen**     | `F2` -- edit themes, keymaps, editor options and keybindings; saved to `config.toml`         |
 | **Multi-tab**           | Open multiple files, navigate with `Alt+Left/Right`, close with `Ctrl+W`                     |
-| **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes                            |
-| **File explorer**       | `Ctrl+B` -- tree view sidebar with `.gitignore` awareness                                    |
+| **Unsaved protection**  | Confirmation dialog on close/quit when files have unsaved changes -- keyboard or mouse       |
+| **File explorer**       | `Ctrl+B` -- tree sidebar with a toolbar, `.gitignore` awareness, and `..` to walk up         |
 | **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF                             |
 | **Lua plugins**         | Custom commands, editor API, hook system                                                     |
 | **Undo/Redo**           | Branching history with full transaction support                                              |
-| **Mouse support**       | Click, drag select, scroll wheel, tab/sidebar click                                          |
+| **Mouse support**       | Click, drag select, scroll wheel, tabs, top bar and explorer buttons, dialog buttons          |
 
 ### Under the Hood
 
@@ -119,18 +204,93 @@ termcode                     # Empty editor
 
 1. **Open a project** -- `termcode .` to start with the file explorer
 2. **Navigate files** -- `Ctrl+B` to toggle sidebar, `Ctrl+P` to fuzzy find
-3. **Edit** -- press `i` to enter Edit mode, `Esc` to return to Normal mode
+3. **Edit** -- just type: the default keymap has no modal layer (with a modal preset, `i` enters Edit mode and `Esc` leaves it)
 4. **Save** -- `Ctrl+S`
 5. **Search** -- `Ctrl+F` to search, `Ctrl+H` to search & replace
 6. **Tabs** -- open multiple files, switch with `Alt+Left` / `Alt+Right`, close with `Ctrl+W`
-7. **Commands** -- `Ctrl+Shift+P` to open command palette (theme switch, all commands)
+7. **Commands** -- `F1` (or `Alt+X`) to open the command palette (theme switch, all commands)
 8. **Settings** -- `F2` to change themes, keymaps, editor options and keybindings (see [Settings](#settings))
 9. **LSP** -- auto-activates if a language server is configured (see [Configuration](#configuration))
-10. **Quit** -- `Ctrl+Q`
+10. **Quit** -- `Ctrl+Q`, or the **^Q Exit** button in the top bar
 
 ## Keybindings
 
-### Normal Mode
+Out of the box termcode loads the **`vscode` preset**: no modal layer, VS Code
+shortcuts, ready to type. The built-in hybrid keymap (with a Normal mode) and
+the other presets are one line of config away -- see
+[Keymap Presets](#keymap-presets).
+
+Every keymap here replaces the whole map, so the tables below are per preset,
+not a common baseline with variations. For whichever one you are actually
+running, the editor itself is the reference: the **help popup** (`Alt+H` under
+the default preset, `F1` / `?` under the built-in one) and the **Keybindings
+page of [Settings](#settings)** (`F2`) both list the keys the *active* keymap
+binds, including anything your `keybindings.toml` added on top.
+
+### Default keys (`vscode` preset)
+
+| Key                        | Action                          |
+| -------------------------- | ------------------------------- |
+| Any character              | Insert at cursor                |
+| Arrow keys / `Home` `End`  | Move cursor                     |
+| `Ctrl+Left` / `Ctrl+Right` | Move by word                    |
+| `Ctrl+Home` / `Ctrl+End`   | Document start / end            |
+| `Ctrl+A` / `Ctrl+E`        | Line start / end (readline)     |
+| `Ctrl+S`                   | Save                            |
+| `Ctrl+P`                   | Fuzzy file finder               |
+| `F1` / `Alt+X`             | Command palette                 |
+| `F2`                       | Settings                        |
+| `Ctrl+F` / `Ctrl+H`        | Search / Search & Replace       |
+| `F3` / `Shift+F3`          | Next / previous match           |
+| `Ctrl+B` / `Alt+B`         | Toggle file explorer            |
+| `Ctrl+K`                   | Delete line                     |
+| `Ctrl+Z` / `Ctrl+U`        | Undo                            |
+| `Ctrl+Y`                   | Redo                            |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / Cut / Paste          |
+| `Alt+Left` / `Alt+Right`   | Previous / next tab             |
+| `Ctrl+W`                   | Close tab (confirms if unsaved) |
+| `F12` / `Alt+F12`          | Go to definition / hover info   |
+| `F8` / `Shift+F8`          | Next / previous diagnostic      |
+| `Ctrl+L`                   | Toggle line numbers             |
+| `Alt+H`                    | Help                            |
+| `Ctrl+Q`                   | Quit (confirms if unsaved)      |
+
+The palette is on `F1`/`Alt+X` rather than `Ctrl+Shift+P`, and the sidebar also
+on `Alt+B`, because most terminals cannot tell `Ctrl+Shift+P` from `Ctrl+P` and
+tmux claims `Ctrl+B`.
+
+### File Explorer
+
+| Key                          | Action                                |
+| ---------------------------- | ------------------------------------- |
+| `↑` `↓`                      | Move selection                        |
+| `→`                          | Expand the directory in place         |
+| `←`                          | Collapse it, or step out to its parent |
+| `Enter`                      | Enter the directory (it becomes the root), or open the file |
+| `..` row                     | Walk the root up one level            |
+| `Ctrl+N` / `Ctrl+Shift+N`    | New file / new folder, named in the tree |
+| `Ctrl+C`                     | Copy the absolute path                |
+| `F5` / `Shift+F5`            | Refresh the selected folder / the tree |
+| `Esc` / `Tab`                | Leave the explorer                    |
+
+With the mouse: a click on the `▶`/`▼` chevron expands the directory in place, a
+double click on the name enters it, and the toolbar above the tree holds
+**New File / New Folder / Refresh / Copy Path**.
+
+Under a modal preset the same actions are on `j` `k` `l` `h`, `n` `N`, `y` and
+`r` `R`.
+
+### Built-in keymap
+
+The two tables below describe the built-in hybrid keymap -- VS Code shortcuts
+plus a small modal layer. Select it with an empty preset:
+
+```toml
+[keymap]
+preset = ""
+```
+
+#### Normal Mode
 
 | Key                          | Action                          |
 | ---------------------------- | ------------------------------- |
@@ -160,7 +320,7 @@ termcode                     # Empty editor
 | `F1` / `?`                   | Help                            |
 | `F2`                         | Settings                        |
 
-### Edit Mode
+#### Edit Mode
 
 | Key                    | Action                |
 | ---------------------- | --------------------- |
@@ -173,13 +333,12 @@ termcode                     # Empty editor
 
 ### Keymap Presets
 
-The table above describes the built-in keymap, a hybrid of VS Code shortcuts and
-a small modal layer. If you would rather have the keys your usual editor uses,
-pick a preset in `config.toml`:
+A preset decides the whole keymap. `vscode` is the default; pick another in
+`config.toml`:
 
 ```toml
 [keymap]
-preset = "vim"   # "vscode" | "vim" | "helix"
+preset = "vim"   # "vscode" (default) | "vim" | "helix" | "" for the built-in keymap
 ```
 
 | Preset   | Style                                                                                    |
@@ -195,6 +354,9 @@ overrides still apply on top of the preset.
 The `vscode` preset has no modal layer: it opens ready to type, `Esc` does not
 drop you into a mode with nothing bound, and closing an overlay returns you to
 the buffer. A preset opts into that with `[meta] initial_mode = "insert"`.
+
+Since a missing `preset` key means the default, the built-in keymap is selected
+by an **empty** value (`preset = ""`) rather than by leaving the key out.
 
 Presets live in `runtime/keymaps/*.toml`; drop your own into
 `~/.config/termcode/keymaps/` to add one — that directory is searched first, so
@@ -219,7 +381,9 @@ next key, measured from the last one. If the sequence is abandoned while you are
 typing — into the buffer, the search box, or the finder — the keys are entered as
 text rather than lost.
 
-All keybindings are customizable via `keybindings.toml`. See [Configuration](#configuration).
+All keybindings are customizable via `keybindings.toml`, which layers on top of
+whichever preset is active rather than replacing it. See
+[Configuration](#configuration).
 
 ## Settings
 
@@ -230,7 +394,7 @@ the command palette, for a screen that edits the configuration in place:
 | --------------- | ------------------------------------------------------------------------ |
 | **Appearance**  | Theme, keymap preset, sidebar visibility and width, file tree style      |
 | **Editor**      | Tab size, spaces vs tabs, line numbers, scroll-off, mouse, chord timeout |
-| **Keybindings** | Every command and the keys bound to it, rebindable in place              |
+| **Keybindings** | Every command and the keys the *active* keymap binds to it, rebindable in place |
 | **Plugins**     | Plugin on/off switches, and the configured LSP servers for reference     |
 
 The screen is three levels deep, and the arrows move between them:
@@ -256,6 +420,11 @@ A change takes effect immediately **and** is written to your `config.toml` --
 comments and key order in that file are preserved, only the key you changed is
 rewritten. Rows marked `*` are read once at startup, so they are saved but need
 a restart to take effect.
+
+The Keybindings page follows the keymap you are running, so it shows the
+`vscode` keys by default and a different set after switching preset. Switching
+preset replaces the whole list; your `keybindings.toml` overrides are re-applied
+on top of the new one, and the rows show them too.
 
 To rebind a command, select it and press `Enter`, then type the keys and press
 `Enter` again -- multi-key chords like `g g` work, and `Esc` cancels (which is
@@ -307,7 +476,7 @@ show_file_type_emoji = true
 respect_gitignore = true
 
 [keymap]
-# preset = "vim"              # "vscode", "vim", "helix"; omit for the built-in keymap
+# preset = "vim"              # "vscode" (default), "vim", "helix"; "" for the built-in keymap
 chord_timeout_ms = 1000       # gap allowed between the keys of a chord
 
 [plugins]
@@ -343,7 +512,7 @@ ones, and the overlay modes do not consult `[global]` at all.
 "g g" = "cursor.home"         # multi-key chords are written with spaces
 ```
 
-Command IDs are listed in the command palette (`Ctrl+Shift+P`) and on the
+Command IDs are listed in the command palette (`F1`) and on the
 Keybindings page of the settings screen. Unknown IDs are logged and skipped.
 
 ## Themes
@@ -355,7 +524,7 @@ Ships with **4 built-in themes**:
 - **Catppuccin Mocha**
 - **Lazygit**
 
-Switch themes from the command palette (`Ctrl+Shift+P` > **Select Theme**) for
+Switch themes from the command palette (`F1` > **Select Theme**) for
 this session, or from [Settings](#settings) (`F2`) to save the choice as well.
 
 ### Custom Themes
