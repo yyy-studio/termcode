@@ -488,7 +488,10 @@ impl FileExplorer {
         };
         let icon_width: u16 = if style.show_file_type_emoji { 3 } else { 0 };
         let name_start = indent + icon_width;
-        let name_len = node.name.len() as u16;
+        // Columns, not bytes: a CJK name is three bytes a character and two
+        // columns, so `len()` would scroll the tree sideways for a name that
+        // fits where it is.
+        let name_len = unicode_width::UnicodeWidthStr::width(node.name.as_str()) as u16;
         let name_end = name_start + name_len;
 
         let width = self.width;
@@ -617,6 +620,32 @@ mod tests {
         for c in name.chars() {
             input.insert_char(c);
         }
+    }
+
+    #[test]
+    fn a_cjk_name_that_fits_does_not_scroll_the_tree_sideways() {
+        let dir = TempDir::new("cjk-scroll");
+        let mut ex = explorer(&dir);
+        let style = FileTreeStyle {
+            tree_style: false,
+            show_file_type_emoji: true,
+            ..FileTreeStyle::default()
+        };
+        // Six Hangul syllables: twelve columns, but eighteen bytes.
+        ex.tree.push(FileNode {
+            path: dir.0.join("가나다라마바"),
+            name: "가나다라마바".to_string(),
+            kind: FileNodeKind::Directory,
+            depth: 6,
+            expanded: false,
+            is_parent: false,
+        });
+        ex.selected = ex.tree.len() - 1;
+        ex.width = 30;
+        // Indent 12 + icon 3 + name 12 = 27 of the 30 columns: it fits, so the
+        // tree stays where it is. Measured in bytes it came to 33 and scrolled.
+        ex.compute_scroll_left(&style);
+        assert_eq!(ex.scroll_left, 0);
     }
 
     #[test]

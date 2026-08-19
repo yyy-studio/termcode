@@ -4,6 +4,8 @@ use ratatui::style::Style;
 
 use termcode_theme::theme::Theme;
 
+use crate::display_width::{char_display_width, char_index_to_display_col};
+
 #[derive(Debug, Clone, Copy)]
 pub enum OverlayPosition {
     Top,
@@ -185,15 +187,29 @@ pub fn render_input_line(
         x += 1;
     }
 
-    // Calculate text scroll offset if text is too long
+    // Scroll the text in display columns, not in characters: `cursor_pos` is a
+    // character index, and a CJK character is two columns wide, so counting
+    // characters would leave the cursor sitting inside the text it follows.
     let available_width = (max_x.saturating_sub(x)) as usize;
-    let effective_cursor = cursor_pos.unwrap_or(0);
-    let text_offset =
-        if cursor_pos.is_some() && effective_cursor > available_width.saturating_sub(1) {
-            effective_cursor - available_width.saturating_sub(1)
-        } else {
-            0
-        };
+    let cursor_col = cursor_pos.map(|c| char_index_to_display_col(text, c));
+    // The first character drawn, and the column it starts at. A wide character
+    // straddling the scroll point is skipped whole rather than drawn as half.
+    let (text_offset, offset_col) = match cursor_col {
+        Some(col) if col > available_width.saturating_sub(1) => {
+            let skip = col - available_width.saturating_sub(1);
+            let mut idx = 0usize;
+            let mut start = 0usize;
+            for ch in text.chars() {
+                if start >= skip {
+                    break;
+                }
+                start += char_display_width(ch);
+                idx += 1;
+            }
+            (idx, start)
+        }
+        _ => (0, 0),
+    };
 
     // Render text
     let input_start_x = x;
@@ -216,8 +232,8 @@ pub fn render_input_line(
     }
 
     // Render cursor only when focused (Some)
-    if let Some(cpos) = cursor_pos {
-        let cursor_x = input_start_x + (cpos - text_offset) as u16;
+    if let Some(col) = cursor_col {
+        let cursor_x = input_start_x + col.saturating_sub(offset_col) as u16;
         if cursor_x < max_x {
             let cell = &mut buf[(cursor_x, area.y)];
             cell.set_style(Style::default().fg(theme.ui.background.to_ratatui()).bg(fg));
@@ -384,5 +400,43 @@ mod tests {
 
         // The theme's own background, shaded -- not left at full brightness.
         assert_eq!(buf[(11, 5)].bg, RatColor::Rgb(20, 22, 26));
+    }
+
+    /// The column the cursor cell sits at, found by its reversed colours.
+    fn cursor_column(buf: &Buffer, width: u16, theme: &Theme) -> Option<u16> {
+        let cursor_bg = theme.ui.foreground.to_ratatui();
+        (0..width).find(|x| buf[(*x, 0)].bg == cursor_bg)
+    }
+
+    #[test]
+    fn the_cursor_follows_cjk_text_by_columns_not_by_characters() {
+        let theme = Theme::default();
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buf = Buffer::empty(area);
+        // Three Hangul syllables: six columns after the eight-column prompt.
+        render_input_line(area, &mut buf, "Search: ", "한글값", Some(3), &theme);
+        assert_eq!(cursor_column(&buf, area.width, &theme), Some(8 + 6));
+
+        // And mid-string, after the first syllable.
+        let mut buf = Buffer::empty(area);
+        render_input_line(area, &mut buf, "Search: ", "한글값", Some(1), &theme);
+        assert_eq!(cursor_column(&buf, area.width, &theme), Some(8 + 2));
+    }
+
+    #[test]
+    fn cjk_text_wider_than_the_line_scrolls_to_keep_the_cursor_in_view() {
+        let theme = Theme::default();
+        // Eight columns of prompt and six of text leave the cursor at the edge.
+        let area = Rect::new(0, 0, 15, 1);
+        let mut buf = Buffer::empty(area);
+        render_input_line(area, &mut buf, "Search: ", "한글값어치", Some(5), &theme);
+
+        let cursor = cursor_column(&buf, area.width, &theme).expect("a cursor");
+        assert!(
+            cursor < area.width,
+            "the cursor stays on the line: {cursor}"
+        );
+        // Whole syllables only -- no half of a wide character at the seam.
+        assert_eq!(buf[(8, 0)].symbol(), "값");
     }
 }
