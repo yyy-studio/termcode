@@ -73,6 +73,27 @@ fn draw(state: &SettingsState, area: Rect) {
 }
 
 #[test]
+fn the_popup_is_centred_and_dropped_where_it_cannot_fit() {
+    use termcode_term::ui::settings::popup_area;
+
+    let frame = Rect::new(0, 0, 100, 30);
+    let popup = popup_area(frame).expect("100x30 fits the popup");
+    assert!(popup.width < frame.width, "it floats rather than fills");
+    assert!(popup.height < frame.height);
+    // Equal margins on both sides, give or take the odd column.
+    assert!(popup.x.abs_diff(frame.width - popup.x - popup.width) <= 1);
+    assert!(popup.y.abs_diff(frame.height - popup.y - popup.height) <= 1);
+
+    // A large terminal is capped rather than handed the whole thing.
+    let wide = popup_area(Rect::new(0, 0, 300, 100)).unwrap();
+    assert!(wide.width <= 96 && wide.height <= 24);
+
+    // Too small for the two panes: nothing to draw.
+    assert!(popup_area(Rect::new(0, 0, 40, 24)).is_none());
+    assert!(popup_area(Rect::new(0, 0, 100, 6)).is_none());
+}
+
+#[test]
 fn renders_at_a_range_of_sizes() {
     let state = state();
     for (width, height) in [(80, 24), (120, 40), (40, 10), (31, 6), (200, 60)] {

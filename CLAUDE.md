@@ -233,11 +233,18 @@ File type icons are configured per-theme via `[icons]` section (directory_open, 
 
 `EditorMode::Settings` (`F2`, the top bar button, or `settings.open` from the
 palette -- the button goes through `MouseAction::OpenSettings`, since building
-the rows needs `App`) is a two-pane
-screen: a fixed list of categories (Appearance, Editor, Keybindings, Plugins)
-and the rows of the selected one. It resolves keys like the other overlays --
-mode table only, no global fallback -- so a shortcut cannot navigate away from
-a screen the user is in the middle of.
+the rows needs `App`) is a two-pane popup: a fixed list of categories
+(Appearance, Editor, Keybindings, Plugins) and the rows of the selected one. It
+resolves keys like the other overlays -- mode table only, no global fallback --
+so a shortcut cannot navigate away from a screen the user is in the middle of.
+
+The popup floats over the **whole frame**, not over the editor area: what it
+edits belongs to the sidebar as much as to the editor. `ui::settings::popup_area`
+is the single source of its geometry -- a share of the frame, capped, centred,
+and `None` where the terminal is too small for the two panes, in which case
+nothing is drawn. `App` sizes `settings.visible_height` and the value picker's
+rows from that same function rather than from the frame, since paging by a
+screenful only works if both agree on how tall the screen is.
 
 `SettingsState` (termcode-view) holds only the cursor, the rows, and the capture
 flag. It never builds the rows: the available themes, keymaps, plugins and

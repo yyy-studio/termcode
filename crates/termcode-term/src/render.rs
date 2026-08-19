@@ -158,7 +158,7 @@ pub fn render(
         }
         EditorMode::Settings => {
             let settings_widget = SettingsWidget::new(&editor.settings, &editor.theme);
-            frame.render_widget(settings_widget, app_layout.editor_area);
+            frame.render_widget(settings_widget, app_layout.frame);
         }
         _ => {}
     }
