@@ -193,6 +193,15 @@ impl LanguageRegistry {
             injections: InjectionConfigs::default(),
             grammar: Some(tree_sitter_css::LANGUAGE.into()),
         });
+        reg.register(LanguageConfig {
+            id: Arc::from("csharp"),
+            name: "C#".to_string(),
+            file_extensions: vec!["cs".to_string(), "csx".to_string()],
+            highlight_query: String::new(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
+            grammar: Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        });
 
         reg
     }
@@ -292,6 +301,28 @@ mod tests {
             reg.detect_language(Path::new("style.css")).as_deref(),
             Some("css")
         );
+    }
+
+    #[test]
+    fn test_csharp_detected_by_extension() {
+        let reg = LanguageRegistry::with_builtins();
+        assert_eq!(
+            reg.detect_language(Path::new("Program.cs")).as_deref(),
+            Some("csharp")
+        );
+        assert_eq!(
+            reg.detect_language(Path::new("script.csx")).as_deref(),
+            Some("csharp")
+        );
+    }
+
+    #[test]
+    fn test_csharp_highlight_query_is_loaded() {
+        let mut reg = LanguageRegistry::with_builtins();
+        reg.load_queries(&runtime_dir());
+
+        let csharp = reg.get("csharp").expect("csharp should be registered");
+        assert!(!csharp.highlight_query.is_empty(), "csharp highlights.scm");
     }
 
     #[test]

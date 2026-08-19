@@ -65,6 +65,7 @@ tree-sitter-md = "0.3"
 tree-sitter-bash = "0.23"
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.23"
+tree-sitter-c-sharp = "0.23"
 
 # TUI
 ratatui = "0.29"

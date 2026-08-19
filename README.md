@@ -157,7 +157,7 @@ syntax queries.
 | Feature                 | Details                                                                                      |
 | ----------------------- | -------------------------------------------------------------------------------------------- |
 | **Modal editing**       | 7 modes -- Normal, Edit, File Explorer, Search, Fuzzy Finder, Command Palette, Settings; the default keymap is modeless |
-| **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, HTML, CSS, Bash, TOML, JSON, Markdown |
+| **Syntax highlighting** | Tree-sitter based -- Rust, Python, JS, TS, Go, C, C++, C#, HTML, CSS, Bash, TOML, JSON, Markdown |
 | **LSP integration**     | Autocomplete, hover info, go-to-definition, real-time diagnostics                            |
 | **Fuzzy file finder**   | `Ctrl+P` -- fast fuzzy search with smart scoring                                             |
 | **Search & Replace**    | `Ctrl+F` / `Ctrl+H` -- case-insensitive, match counter, replace all                          |
@@ -491,7 +491,18 @@ args = []
 language = "python"
 command = "pyright-langserver"
 args = ["--stdio"]
+
+[[lsp]]
+language = "csharp"
+command = "csharp-ls"
+args = []
 ```
+
+`language` is the id the syntax registry detects from the file extension
+(`rust`, `python`, `typescript`, `csharp`, ...), and it is also sent to the
+server as the LSP `languageId`. A server is spawned the first time a file of
+that language is opened; if the command is not on `PATH` the editor reports the
+failure in the status bar and carries on without it.
 
 ### keybindings.toml
 

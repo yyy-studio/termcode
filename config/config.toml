@@ -44,3 +44,10 @@ enabled = true
 # language = "typescript"
 # command = "typescript-language-server"
 # args = ["--stdio"]
+#
+# C#: `dotnet tool install --global csharp-ls`. Point the editor at the
+# directory holding the .sln/.csproj so the server can load the project.
+# [[lsp]]
+# language = "csharp"
+# command = "csharp-ls"
+# args = []

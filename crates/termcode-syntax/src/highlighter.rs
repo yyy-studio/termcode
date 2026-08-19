@@ -324,6 +324,38 @@ mod tests {
         }
     }
 
+    fn csharp_config() -> LanguageConfig {
+        LanguageConfig {
+            id: Arc::from("csharp"),
+            name: "C#".to_string(),
+            file_extensions: vec!["cs".to_string(), "csx".to_string()],
+            highlight_query: include_str!("../../../runtime/queries/csharp/highlights.scm")
+                .to_string(),
+            injection_query: String::new(),
+            injections: InjectionConfigs::default(),
+            grammar: Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        }
+    }
+
+    #[test]
+    fn test_csharp_highlighting() {
+        let config = csharp_config();
+        let mut hl = SyntaxHighlighter::new(&config).expect("csharp highlighter should be created");
+        let source = Rope::from_str("public class Foo { void Bar() { return; } }\n");
+        hl.parse(&source);
+        let lines = hl.highlight_lines(&source, 0..1);
+        let scopes: Vec<&str> = lines[0].iter().map(|s| s.scope.as_str()).collect();
+        assert!(
+            scopes.contains(&"keyword"),
+            "expected keyword, got {scopes:?}"
+        );
+        assert!(scopes.contains(&"type"), "expected type, got {scopes:?}");
+        assert!(
+            scopes.contains(&"keyword.control.return"),
+            "expected keyword.control.return, got {scopes:?}"
+        );
+    }
+
     #[test]
     fn test_parse_produces_tree() {
         let config = rust_config();
@@ -704,6 +736,11 @@ mod tests {
         grammar_markdown,
         tree_sitter_md::LANGUAGE.into(),
         include_str!("../../../runtime/queries/markdown/highlights.scm")
+    );
+    test_grammar!(
+        grammar_csharp,
+        tree_sitter_c_sharp::LANGUAGE.into(),
+        include_str!("../../../runtime/queries/csharp/highlights.scm")
     );
 
     #[test]
