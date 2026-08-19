@@ -599,6 +599,7 @@ impl App {
             MouseAction::ConfirmSelected => self.execute_confirm_action(),
             MouseAction::ExplorerCommand(command) => self.dispatch_explorer_command(command),
             MouseAction::SidebarResized(width) => self.persist_sidebar_width(width),
+            MouseAction::ScrollSettings(direction) => self.scroll_settings(direction),
         }
     }
 

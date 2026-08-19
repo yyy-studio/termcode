@@ -16,7 +16,7 @@ use termcode_config::writer;
 use termcode_core::config_types::LineNumberStyle;
 use termcode_view::editor::EditorMode;
 use termcode_view::settings::{
-    SettingItem, SettingTarget, SettingValue, SettingsAction, SettingsCategory,
+    SettingItem, SettingTarget, SettingValue, SettingsAction, SettingsCategory, SettingsFocus,
 };
 
 use super::{App, BUILTIN_KEYMAP, list_available_themes};
@@ -304,6 +304,29 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// One wheel notch on the settings screen, `-1` up and `1` down.
+    ///
+    /// Routed through the same command the arrow keys run, so the value
+    /// picker, the category pane and live preview all behave as they do under
+    /// the keyboard rather than needing a second implementation.
+    ///
+    /// A notch moves a list by three rows, as it does everywhere else -- but
+    /// the category pane is four wrapping entries, where three would land
+    /// somewhere with no relation to the direction turned.
+    pub(super) fn scroll_settings(&mut self, direction: i32) {
+        let list_focused = self.editor.settings.picker.is_some()
+            || self.editor.settings.focus == SettingsFocus::Items;
+        let steps = if list_focused { 3 } else { 1 };
+        let cmd = if direction < 0 {
+            "settings.up"
+        } else {
+            "settings.down"
+        };
+        for _ in 0..steps {
+            self.run_settings_command(cmd);
         }
     }
 
@@ -937,6 +960,36 @@ mod tests {
             "38",
             "the settings screen shows what the drag produced"
         );
+    }
+
+    #[test]
+    fn the_wheel_moves_the_rows_by_three_and_the_categories_by_one() {
+        let (mut app, _config_path) = app_with_settings("wheel");
+        app.editor.settings.load_items(
+            (0..40)
+                .map(|i| {
+                    SettingItem::new(
+                        format!("Row {i}"),
+                        SettingValue::Bool(false),
+                        SettingTarget::ReadOnly,
+                    )
+                })
+                .collect(),
+        );
+        app.editor.settings.selected = 0;
+        app.editor.settings.set_focus(SettingsFocus::Items);
+
+        app.scroll_settings(1);
+        assert_eq!(app.editor.settings.selected, 3, "a notch is three rows");
+        app.scroll_settings(-1);
+        assert_eq!(app.editor.settings.selected, 0);
+
+        // The category pane is four wrapping entries: three per notch would
+        // land somewhere unrelated to the direction turned.
+        app.editor.settings.set_focus(SettingsFocus::Categories);
+        let before = app.editor.settings.category_index;
+        app.scroll_settings(1);
+        assert_eq!(app.editor.settings.category_index, before + 1);
     }
 
     #[test]

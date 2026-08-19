@@ -74,6 +74,7 @@ impl Widget for CompletionWidget<'_> {
         };
 
         let popup_rect = Rect::new(x, y, width, height);
+        crate::ui::overlay::render_shadow(popup_rect, buf, self.theme);
 
         // Fill background and draw border.
         let bg = self.theme.ui.sidebar_bg.to_ratatui();

@@ -45,6 +45,24 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 
 **Overlay rendering:** Search, fuzzy finder, command palette, completion, and hover are rendered as overlays on top of the editor area (rendered last in `render.rs`). Each has state in `Editor` and a dedicated widget.
 
+Every popup casts a shadow: `overlay::render_shadow` dims the band its
+rectangle would fall on, offset two columns right and one row down (two to one,
+because a cell is twice as tall as it is wide). It *dims* rather than fills, so
+the text behind stays readable, and it is called from `render_overlay_frame` --
+a widget that draws its own frame (`confirm_dialog`, `help_popup`,
+`completion`, `hover`) calls it directly. `Indexed` and `Reset` colours have no
+channels to scale and take the theme's shaded background instead.
+
+An overlay that owns a mode owns the wheel with it (`mouse::handle_wheel`):
+it moves the overlay's own list where there is one and is swallowed where
+there is not, never reaching the buffer behind. Text sliding around under a
+popup reads as the input having gone through to the editor, which is exactly
+what has not happened. Where the pointer is does not come into it -- a wheel
+that fell through whenever the pointer sat outside the popup would be the leak
+this closes. The settings screen returns `MouseAction::ScrollSettings` instead
+of moving anything itself, so the category pane, the value picker and live
+preview all go down the same path the arrow keys use.
+
 ### Key Data Flow
 
 ```
