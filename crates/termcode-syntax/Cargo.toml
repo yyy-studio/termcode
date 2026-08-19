@@ -27,6 +27,7 @@ tree-sitter-md.workspace = true
 tree-sitter-bash.workspace = true
 tree-sitter-html.workspace = true
 tree-sitter-css.workspace = true
+tree-sitter-c-sharp.workspace = true
 once_cell.workspace = true
 thiserror.workspace = true
 log.workspace = true

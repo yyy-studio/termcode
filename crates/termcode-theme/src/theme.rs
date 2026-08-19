@@ -116,6 +116,8 @@ impl Default for Icons {
             "go",
             "c",
             "cpp",
+            "cs",
+            "csx",
             "h",
             "hpp",
             "java",
