@@ -26,7 +26,15 @@ pub enum MouseAction {
     /// The sidebar divider was released after a drag that changed the width.
     /// Writing it to the config file is `App`'s job.
     SidebarResized(u16),
+    /// One wheel notch on the settings screen, `-1` up and `1` down. The
+    /// screen has a category pane, a value picker and live preview hanging off
+    /// it, so the move goes back to `App` and down the same path the keyboard
+    /// uses rather than being applied here.
+    ScrollSettings(i32),
 }
+
+/// Rows one wheel notch moves, matching what the editor scrolls by.
+const WHEEL_LINES: i32 = 3;
 
 /// Handle a mouse event, dispatching based on which layout region was clicked.
 pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) -> MouseAction {
@@ -48,14 +56,8 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
             editor.file_explorer.resizing = None;
             handle_left_click(editor, event.column, event.row, layout)
         }
-        MouseEventKind::ScrollUp => {
-            handle_scroll_up(editor, event.column, event.row, layout);
-            MouseAction::None
-        }
-        MouseEventKind::ScrollDown => {
-            handle_scroll_down(editor, event.column, event.row, layout);
-            MouseAction::None
-        }
+        MouseEventKind::ScrollUp => handle_wheel(editor, -1, layout),
+        MouseEventKind::ScrollDown => handle_wheel(editor, 1, layout),
         MouseEventKind::Drag(MouseButton::Left) => {
             handle_drag(editor, event.column, event.row, layout);
             MouseAction::None
@@ -354,6 +356,57 @@ pub fn tab_positions(tabs: &termcode_view::tab::TabManager) -> Vec<(usize, usize
     positions
 }
 
+/// True while something is drawn over the editor that the wheel belongs to.
+fn popup_is_up(editor: &Editor) -> bool {
+    editor.help_visible
+        || matches!(
+            editor.mode,
+            EditorMode::Search
+                | EditorMode::FuzzyFinder
+                | EditorMode::CommandPalette
+                | EditorMode::Settings
+        )
+}
+
+/// One wheel notch, `-1` up and `1` down.
+///
+/// A popup owns the wheel while it is up: it moves the popup's own list where
+/// there is one and is swallowed where there is not, rather than scrolling the
+/// buffer behind it. Text sliding around underneath a dialog reads as the
+/// input having gone through to the editor, which is exactly what has not
+/// happened -- these popups are modal for the keyboard already.
+///
+/// Where the pointer is does not come into it, for the same reason: a wheel
+/// that fell through to the editor whenever the pointer happened to be outside
+/// the popup would be the leak this exists to close.
+fn handle_wheel(editor: &mut Editor, direction: i32, layout: &AppLayout) -> MouseAction {
+    if popup_is_up(editor) {
+        return match editor.mode {
+            EditorMode::CommandPalette => {
+                editor
+                    .command_palette
+                    .move_selection(direction * WHEEL_LINES);
+                MouseAction::None
+            }
+            EditorMode::FuzzyFinder => {
+                editor.fuzzy_finder.move_selection(direction * WHEEL_LINES);
+                MouseAction::None
+            }
+            EditorMode::Settings => MouseAction::ScrollSettings(direction),
+            // The search overlay is an input line and the help popup is a
+            // single page: nothing to move, but still nothing to leak.
+            _ => MouseAction::None,
+        };
+    }
+
+    if direction < 0 {
+        handle_scroll_up(editor, 0, 0, layout);
+    } else {
+        handle_scroll_down(editor, 0, 0, layout);
+    }
+    MouseAction::None
+}
+
 fn handle_scroll_up(editor: &mut Editor, _x: u16, _y: u16, _layout: &AppLayout) {
     if let Some(view) = editor.active_view_mut() {
         view.scroll_up(3);
@@ -631,6 +684,115 @@ mod tests {
 
         handle_mouse(&mut editor, drag(50, 5), &layout);
         assert_eq!(editor.file_explorer.width, 20, "not stuck to the pointer");
+    }
+
+    fn wheel(down: bool, x: u16, y: u16) -> MouseEvent {
+        mouse_at(
+            if down {
+                MouseEventKind::ScrollDown
+            } else {
+                MouseEventKind::ScrollUp
+            },
+            x,
+            y,
+        )
+    }
+
+    /// An editor with a document long enough to scroll, parked partway down it.
+    fn editor_with_a_scrolled_document(name: &str) -> (Editor, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join("termcode-wheel-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.txt"));
+        std::fs::write(&path, "line\n".repeat(500)).unwrap();
+
+        let mut editor = make_editor();
+        editor.open_file(&path).unwrap();
+        let view = editor.active_view_mut().unwrap();
+        view.area_height = 20;
+        view.scroll.top_line = 100;
+        (editor, path)
+    }
+
+    #[test]
+    fn a_popup_swallows_the_wheel_instead_of_scrolling_the_buffer_behind_it() {
+        let layout = layout_with_title();
+        for mode in [
+            EditorMode::Search,
+            EditorMode::FuzzyFinder,
+            EditorMode::CommandPalette,
+            EditorMode::Settings,
+        ] {
+            let (mut editor, _p) = editor_with_a_scrolled_document("popup-modes");
+            editor.mode = mode;
+
+            handle_mouse(&mut editor, wheel(true, 60, 10), &layout);
+            handle_mouse(&mut editor, wheel(false, 60, 10), &layout);
+
+            assert_eq!(
+                editor.active_view().unwrap().scroll.top_line,
+                100,
+                "{mode:?} let the wheel through to the buffer"
+            );
+        }
+    }
+
+    #[test]
+    fn the_help_popup_swallows_the_wheel_too() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("popup-help");
+        editor.help_visible = true;
+
+        handle_mouse(&mut editor, wheel(true, 60, 10), &layout_with_title());
+
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 100);
+    }
+
+    #[test]
+    fn the_wheel_moves_the_list_of_the_popup_that_took_it() {
+        use termcode_view::palette::PaletteItem;
+
+        let (mut editor, _p) = editor_with_a_scrolled_document("popup-list");
+        editor.mode = EditorMode::CommandPalette;
+        editor.command_palette.load_commands(
+            (0..20)
+                .map(|i| PaletteItem {
+                    id: format!("cmd.{i}"),
+                    name: format!("Command {i}"),
+                })
+                .collect(),
+        );
+
+        handle_mouse(&mut editor, wheel(true, 60, 10), &layout_with_title());
+        assert_eq!(
+            editor.command_palette.selected, 3,
+            "one notch is three rows"
+        );
+
+        handle_mouse(&mut editor, wheel(false, 60, 10), &layout_with_title());
+        assert_eq!(editor.command_palette.selected, 0);
+    }
+
+    #[test]
+    fn the_settings_wheel_goes_back_to_app() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("popup-settings");
+        editor.mode = EditorMode::Settings;
+
+        // The screen has a category pane and a value picker hanging off it, so
+        // the move is `App`'s to make.
+        let action = handle_mouse(&mut editor, wheel(true, 60, 10), &layout_with_title());
+        assert!(matches!(action, MouseAction::ScrollSettings(1)));
+        let action = handle_mouse(&mut editor, wheel(false, 60, 10), &layout_with_title());
+        assert!(matches!(action, MouseAction::ScrollSettings(-1)));
+    }
+
+    #[test]
+    fn the_wheel_still_scrolls_the_buffer_with_nothing_over_it() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("no-popup");
+
+        handle_mouse(&mut editor, wheel(true, 60, 10), &layout_with_title());
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 103);
+
+        handle_mouse(&mut editor, wheel(false, 60, 10), &layout_with_title());
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 100);
     }
 
     #[test]
