@@ -27,17 +27,32 @@ impl EventHandler {
     /// Poll for the next event. Returns Tick if no event within tick_rate.
     pub fn next(&self) -> anyhow::Result<AppEvent> {
         if event::poll(self.tick_rate)? {
-            match event::read()? {
-                CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                    Ok(AppEvent::Key(key))
-                }
-                CrosstermEvent::Key(_) => Ok(AppEvent::Tick),
-                CrosstermEvent::Mouse(mouse) => Ok(AppEvent::Mouse(mouse)),
-                CrosstermEvent::Resize(w, h) => Ok(AppEvent::Resize(w, h)),
-                _ => Ok(AppEvent::Tick),
-            }
+            Ok(read_event()?)
         } else {
             Ok(AppEvent::Tick)
         }
     }
+
+    /// The next event if one is already waiting, without blocking.
+    ///
+    /// Lets the caller take everything the terminal has queued before drawing:
+    /// a wheel flick arrives as a long burst, and only the last frame of it was
+    /// ever going to be seen.
+    pub fn try_next(&self) -> anyhow::Result<Option<AppEvent>> {
+        if event::poll(Duration::ZERO)? {
+            Ok(Some(read_event()?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn read_event() -> anyhow::Result<AppEvent> {
+    Ok(match event::read()? {
+        CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => AppEvent::Key(key),
+        CrosstermEvent::Key(_) => AppEvent::Tick,
+        CrosstermEvent::Mouse(mouse) => AppEvent::Mouse(mouse),
+        CrosstermEvent::Resize(w, h) => AppEvent::Resize(w, h),
+        _ => AppEvent::Tick,
+    })
 }
