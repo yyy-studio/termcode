@@ -102,6 +102,7 @@ impl Widget for HoverWidget<'_> {
             return;
         }
         let popup_rect = Rect::new(x, y, width, height);
+        crate::ui::overlay::render_shadow(popup_rect, buf, self.theme);
 
         let bg = self.theme.ui.sidebar_bg.to_ratatui();
         let fg = self.theme.ui.foreground.to_ratatui();

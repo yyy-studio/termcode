@@ -111,6 +111,7 @@ impl Widget for ConfirmDialogWidget<'_> {
             .bg(bg);
 
         let popup_rect = placed.popup;
+        crate::ui::overlay::render_shadow(popup_rect, buf, self.theme);
 
         for y in popup_rect.y..popup_rect.y + popup_rect.height {
             for x in popup_rect.x..popup_rect.x + popup_rect.width {

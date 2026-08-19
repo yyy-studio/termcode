@@ -165,6 +165,7 @@ impl Widget for HelpPopupWidget<'_> {
         let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
 
         let popup_rect = Rect::new(popup_x, popup_y, popup_width, popup_height);
+        crate::ui::overlay::render_shadow(popup_rect, buf, self.theme);
 
         // Fill background (reset to clear any inherited modifiers like REVERSED cursor)
         for y in popup_rect.y..popup_rect.y + popup_rect.height {
