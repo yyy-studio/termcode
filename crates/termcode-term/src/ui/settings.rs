@@ -27,6 +27,41 @@ pub fn picker_visible_rows(area_height: u16, option_count: usize) -> usize {
 /// Width of the category pane, including its divider column.
 const CATEGORY_WIDTH: u16 = 16;
 
+/// Share of the frame the popup takes, and the caps that keep it from becoming
+/// a wall of empty space on a large terminal.
+const WIDTH_PERCENT: u16 = 70;
+const MAX_WIDTH: u16 = 96;
+const HEIGHT_PERCENT: u16 = 75;
+const MAX_HEIGHT: u16 = 24;
+/// Below this the two panes cannot both be drawn, and the popup is dropped
+/// rather than squeezed into columns it does not have.
+const MIN_WIDTH: u16 = 30;
+const MIN_HEIGHT: u16 = 5;
+
+/// Where the settings popup lands in `frame`, or `None` when the terminal is
+/// too small to draw it.
+///
+/// The single source of its geometry, shared by the widget below and `App`,
+/// which sizes the row budget from it -- paging by a screenful only works if
+/// both agree on how tall that screen is.
+pub fn popup_area(frame: Rect) -> Option<Rect> {
+    let width = (frame.width as u32 * WIDTH_PERCENT as u32 / 100) as u16;
+    let width = width.min(MAX_WIDTH).min(frame.width);
+    let height = (frame.height as u32 * HEIGHT_PERCENT as u32 / 100) as u16;
+    let height = height.min(MAX_HEIGHT).min(frame.height);
+
+    if width < MIN_WIDTH || height < MIN_HEIGHT {
+        return None;
+    }
+
+    Some(Rect::new(
+        frame.x + (frame.width - width) / 2,
+        frame.y + (frame.height - height) / 2,
+        width,
+        height,
+    ))
+}
+
 pub struct SettingsWidget<'a> {
     state: &'a SettingsState,
     theme: &'a Theme,
@@ -39,10 +74,12 @@ impl<'a> SettingsWidget<'a> {
 }
 
 impl Widget for SettingsWidget<'_> {
+    /// `area` is the whole frame: the popup floats over the sidebar and the
+    /// editor alike, since what it edits belongs to neither.
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 5 || area.width < 30 {
+        let Some(area) = popup_area(area) else {
             return;
-        }
+        };
         render_overlay_frame(area, buf, self.theme);
 
         let bg = self.theme.ui.sidebar_bg.to_ratatui();

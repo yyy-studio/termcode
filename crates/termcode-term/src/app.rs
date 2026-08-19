@@ -426,14 +426,17 @@ impl App {
                     self.editor.command_palette.visible_height =
                         palette_height.saturating_sub(OVERLAY_CHROME);
 
-                    // Must match the row budget in SettingsWidget: the settings
-                    // screen fills the editor area, minus its border and the
-                    // hint line at the bottom.
-                    self.editor.settings.visible_height = (app_layout.editor_area.height as usize)
-                        .saturating_sub(crate::ui::settings::CHROME_ROWS);
+                    // The settings popup floats over the whole frame, and
+                    // `popup_area` is what decides how tall it is -- asking it
+                    // rather than guessing keeps a page here the same as a page
+                    // on screen. Its border and hint line are not rows to fill.
+                    let settings_height = crate::ui::settings::popup_area(app_layout.frame)
+                        .map_or(0, |popup| popup.height);
+                    self.editor.settings.visible_height =
+                        (settings_height as usize).saturating_sub(crate::ui::settings::CHROME_ROWS);
                     if let Some(picker) = &mut self.editor.settings.picker {
                         let rows = crate::ui::settings::picker_visible_rows(
-                            app_layout.editor_area.height,
+                            settings_height,
                             picker.options.len(),
                         );
                         picker.set_visible_height(rows);

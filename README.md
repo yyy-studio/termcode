@@ -393,7 +393,7 @@ whichever preset is active rather than replacing it. See
 ## Settings
 
 Press `F2`, click **F2 Settings** in the top bar, or run **Open Settings** from
-the command palette, for a screen that edits the configuration in place:
+the command palette, for a popup that edits the configuration in place:
 
 | Category        | What it holds                                                            |
 | --------------- | ------------------------------------------------------------------------ |
