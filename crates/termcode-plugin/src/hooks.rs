@@ -13,6 +13,13 @@ pub enum HookEvent {
         filename: Option<String>,
         language: Option<String>,
     },
+    /// Fired *before* the document is written to disk, so a handler that
+    /// rewrites the buffer (trimming whitespace, formatting) has its edit
+    /// land in the saved file. `OnSave` fires after the write and cannot.
+    OnBeforeSave {
+        path: Option<String>,
+        filename: Option<String>,
+    },
     OnSave {
         path: Option<String>,
         filename: Option<String>,
@@ -45,6 +52,7 @@ impl HookEvent {
     pub fn name(&self) -> &'static str {
         match self {
             HookEvent::OnOpen { .. } => "on_open",
+            HookEvent::OnBeforeSave { .. } => "on_before_save",
             HookEvent::OnSave { .. } => "on_save",
             HookEvent::OnClose { .. } => "on_close",
             HookEvent::OnModeChange { .. } => "on_mode_change",
@@ -59,6 +67,7 @@ impl HookEvent {
     pub fn all_names() -> &'static [&'static str] {
         &[
             "on_open",
+            "on_before_save",
             "on_save",
             "on_close",
             "on_mode_change",
@@ -82,7 +91,8 @@ impl HookEvent {
                 language: language.clone(),
                 ..HookContext::empty()
             },
-            HookEvent::OnSave { path, filename }
+            HookEvent::OnBeforeSave { path, filename }
+            | HookEvent::OnSave { path, filename }
             | HookEvent::OnClose { path, filename }
             | HookEvent::OnBufferChange { path, filename }
             | HookEvent::OnTabSwitch { path, filename } => HookContext {
@@ -309,8 +319,9 @@ mod tests {
     #[test]
     fn test_all_names_complete() {
         let names = HookEvent::all_names();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         assert!(names.contains(&"on_open"));
+        assert!(names.contains(&"on_before_save"));
         assert!(names.contains(&"on_save"));
         assert!(names.contains(&"on_close"));
         assert!(names.contains(&"on_mode_change"));

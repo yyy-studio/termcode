@@ -249,6 +249,10 @@ impl Editor {
         self.active_view.and_then(|id| self.views.get_mut(&id))
     }
 
+    pub fn active_document_id(&self) -> Option<DocumentId> {
+        self.active_view().map(|view| view.doc_id)
+    }
+
     pub fn active_document(&self) -> Option<&Document> {
         let view = self.active_view()?;
         self.documents.get(&view.doc_id)

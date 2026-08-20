@@ -124,11 +124,19 @@ Plugins are sandboxed Lua scripts discovered from `~/.config/termcode/plugins/` 
 
 **Sandbox restrictions:** Restricted Lua stdlib (base, string, table, math, utf8, safe os subset). Instruction and memory limits prevent resource exhaustion. Per-plugin `require()` is scoped to the plugin directory (no path traversal).
 
-**Hook events:** `on_open`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`. Plugins register hooks via `plugin.on("event_name", handler)`.
+**Hook events:** `on_open`, `on_before_save`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`. Plugins register hooks via `plugin.on("event_name", handler)`.
 
 **Plugin commands:** Plugins register commands via `plugin.register_command("name", "description", handler)`, which the loader exposes as `plugin.<plugin-name>.<name>` in the command palette. Commands execute through thread-local `EDITOR_PTR` for safe mutable access during execution.
 
 The Lua globals are `plugin`, `editor` and `log` (see `runtime/plugins/example/init.lua`) -- there is no `termcode` table.
+
+`on_before_save` fires *before* the write, so a handler that rewrites the
+buffer has its edit land in the saved file -- `on_save` fires after and cannot.
+A handler may itself queue `file.save`; `App.in_before_save` is what stops the
+two calling each other forever. The confirm dialog's Save+Close and Save-all
+name the document they are saving, and the whole plugin API reads and writes
+the *active* one, so those saves fire the hook only when the two coincide
+(`dispatch_before_save_hook_for`).
 
 **Deferred actions:** Plugins cannot directly mutate app state. Instead, actions like `OpenFile` and `ExecuteCommand` are queued and processed after hook/command execution completes.
 
@@ -442,7 +450,12 @@ not rendered.
 runtime/
   themes/      # Built-in themes (one-dark, gruvbox-dark, catppuccin-mocha, lazygit)
   keymaps/     # Keymap presets (vscode, vim, helix)
-  plugins/     # Example plugins (each has plugin.toml + init.lua)
+  plugins/     # Shipped plugins (each has plugin.toml + init.lua): `example`,
+               # and `comment`, whose `plugin.comment.toggle` comments the
+               # cursor line or the selected lines. Presets cannot bind it --
+               # `tests/keymap_presets.rs` checks every preset command against a
+               # registry with no plugins loaded -- so it is bound from
+               # `keybindings.toml`, which is re-applied after plugins register.
   queries/     # Tree-sitter highlight queries per language
 ```
 

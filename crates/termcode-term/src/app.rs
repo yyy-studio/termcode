@@ -95,6 +95,10 @@ pub struct App {
     chord_timeout: Duration,
     /// When the current pending chord started, for the timeout above.
     chord_started: Option<Instant>,
+    /// Set while an `on_before_save` handler runs. A handler is free to queue
+    /// `file.save` (a formatter re-saving what it rewrote), and that save must
+    /// not fire the hook again -- the two would call each other forever.
+    in_before_save: bool,
 }
 
 impl App {
@@ -290,6 +294,7 @@ impl App {
             session_root,
             chord_timeout: Duration::from_millis(app_config.keymap.chord_timeout_ms),
             chord_started: None,
+            in_before_save: false,
         }
     }
 
@@ -1222,6 +1227,30 @@ impl App {
         }
     }
 
+    /// Fires `on_before_save` unless one is already running. The guard is what
+    /// makes a formatter plugin safe to write: it may rewrite the buffer and
+    /// queue `file.save`, and the nested save then writes without re-entering.
+    fn dispatch_before_save_hook(&mut self, path: Option<String>, filename: Option<String>) {
+        if self.in_before_save {
+            return;
+        }
+        self.in_before_save = true;
+        self.dispatch_plugin_hook(HookEvent::OnBeforeSave { path, filename });
+        self.in_before_save = false;
+    }
+
+    /// `on_before_save` for a save that names its document -- the confirm
+    /// dialog's Save+Close and Save-all. The whole plugin API reads and writes
+    /// the *active* document, so a handler fired for any other one would edit
+    /// the wrong buffer; those saves go out unhooked instead.
+    fn dispatch_before_save_hook_for(&mut self, doc_id: termcode_view::document::DocumentId) {
+        if self.editor.active_document_id() != Some(doc_id) {
+            return;
+        }
+        let (path, filename) = self.doc_path_info(doc_id);
+        self.dispatch_before_save_hook(path, filename);
+    }
+
     /// One event through `update`, followed by the hooks that watch for the
     /// state it changed. The two are kept together so that coalescing a burst
     /// still fires them per event: a plugin watching the cursor should see the
@@ -1349,6 +1378,10 @@ impl App {
 
         let is_save = cmd_id == "file.save";
         let is_mutation = is_document_mutation(cmd_id);
+        if is_save {
+            let (path, filename) = self.active_doc_path_info();
+            self.dispatch_before_save_hook(path, filename);
+        }
         let result = self
             .command_registry
             .execute_by_str(cmd_id, &mut self.editor);
@@ -1827,6 +1860,7 @@ impl App {
                         if !self.editor.documents.contains_key(&doc_id) {
                             return;
                         }
+                        self.dispatch_before_save_hook_for(doc_id);
                         match self.editor.save_document(doc_id) {
                             Ok(()) => {
                                 self.lsp_notify_did_save_doc(doc_id);
@@ -1859,6 +1893,7 @@ impl App {
                             .map(|(id, _)| *id)
                             .collect();
                         for doc_id in modified_ids {
+                            self.dispatch_before_save_hook_for(doc_id);
                             match self.editor.save_document(doc_id) {
                                 Ok(()) => {
                                     self.lsp_notify_did_save_doc(doc_id);
