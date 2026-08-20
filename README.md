@@ -577,7 +577,7 @@ termcode supports **Lua plugins** for extending editor functionality.
 
 - **Custom commands** -- register commands accessible from the command palette
 - **Editor API** -- read/write buffer text, cursor position, selection, file info
-- **Hook system** -- respond to lifecycle events: `on_open`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`
+- **Hook system** -- respond to lifecycle events: `on_open`, `on_before_save`, `on_save`, `on_close`, `on_mode_change`, `on_cursor_move`, `on_buffer_change`, `on_tab_switch`, `on_ready`
 - **Status bar** -- display messages from plugins
 - **Logging** -- `log.info()`, `log.warn()`, `log.error()`, `log.debug()`
 

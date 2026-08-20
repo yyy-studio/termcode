@@ -365,6 +365,9 @@ fn ts3_all_hook_types_fire() {
         plugin.on("on_open", function(ctx)
             editor.set_status("on_open:" .. (ctx.filename or "nil"))
         end)
+        plugin.on("on_before_save", function(ctx)
+            editor.set_status("on_before_save:" .. (ctx.filename or "nil"))
+        end)
         plugin.on("on_save", function(ctx)
             editor.set_status("on_save:" .. (ctx.filename or "nil"))
         end)
@@ -487,6 +490,70 @@ fn ts3_all_hook_types_fire() {
         editor.status_message.as_deref(),
         Some("on_tab_switch:other.rs")
     );
+
+    // on_before_save
+    manager
+        .dispatch_hook(
+            HookEvent::OnBeforeSave {
+                path: Some("/tmp/main.rs".into()),
+                filename: Some("main.rs".into()),
+            },
+            &mut editor,
+        )
+        .unwrap();
+    assert_eq!(
+        editor.status_message.as_deref(),
+        Some("on_before_save:main.rs")
+    );
+}
+
+/// The hook exists so a handler can still change what gets written; a handler
+/// that only sees the file after the write could not.
+#[test]
+fn ts3_before_save_can_rewrite_the_buffer() {
+    let tmp = tempfile::tempdir().unwrap();
+    create_plugin_dir(
+        tmp.path(),
+        "trim-on-save",
+        r#"
+        plugin.on("on_before_save", function(ctx)
+            local count = editor.get_line_count()
+            for i = 1, count do
+                local line = editor.get_line(i)
+                local trimmed = line:match("^(.-)%s*$")
+                if #trimmed < #line then
+                    editor.buffer_replace_range(i, 1, i, #line + 1, trimmed)
+                end
+            end
+        end)
+        "#,
+    );
+
+    let config = default_config();
+    let mut manager = PluginManager::new(config).unwrap();
+    manager.load_plugins(&[tmp.path().to_path_buf()]);
+
+    let mut editor = create_test_editor();
+    let file = std::env::temp_dir().join("before_save_trim.txt");
+    fs::write(&file, "kept   \nalso kept\t\n").unwrap();
+    editor.open_file(&file).unwrap();
+
+    let (mutated, _) = manager
+        .dispatch_hook(
+            HookEvent::OnBeforeSave {
+                path: Some(file.display().to_string()),
+                filename: Some("before_save_trim.txt".into()),
+            },
+            &mut editor,
+        )
+        .unwrap();
+
+    assert!(mutated);
+    assert_eq!(
+        editor.active_document().unwrap().buffer.text().to_string(),
+        "kept\nalso kept\n"
+    );
+    let _ = fs::remove_file(&file);
 }
 
 #[test]

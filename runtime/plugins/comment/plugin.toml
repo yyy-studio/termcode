@@ -1,0 +1,4 @@
+name = "comment"
+version = "0.1.0"
+description = "Toggle line comments on the current line or selection"
+author = "termcode"
