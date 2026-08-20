@@ -52,8 +52,10 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
     match event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             // A press starts from a clean slate: an `Up` lost outside the
-            // terminal would otherwise leave the divider stuck to the pointer.
+            // terminal would otherwise leave the divider or the scrollbar thumb
+            // stuck to the pointer.
             editor.file_explorer.resizing = None;
+            editor.scrollbar_drag = None;
             handle_left_click(editor, event.column, event.row, layout)
         }
         MouseEventKind::ScrollUp => handle_wheel(editor, -1, layout),
@@ -62,7 +64,10 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
             handle_drag(editor, event.column, event.row, layout);
             MouseAction::None
         }
-        MouseEventKind::Up(MouseButton::Left) => end_sidebar_resize(editor),
+        MouseEventKind::Up(MouseButton::Left) => {
+            editor.scrollbar_drag = None;
+            end_sidebar_resize(editor)
+        }
         _ => MouseAction::None,
     }
 }
@@ -179,11 +184,77 @@ fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) ->
         return handle_tab_bar_click(editor, x, y, &layout.tab_bar);
     }
 
+    // The scrollbar is inside the editor region's columns, so it is tested
+    // before it -- otherwise a press on the thumb would place the cursor on the
+    // last visible character of the line instead.
+    //
+    // A popup owns the column while it is up, exactly as it owns the wheel: the
+    // press is swallowed rather than scrolling the buffer behind it. It is not
+    // allowed to close the popup either -- the scrollbar never changes the mode.
+    if let Some(track) = layout.editor_scrollbar {
+        if rect_contains(&track, x, y) {
+            if !popup_is_up(editor) {
+                handle_scrollbar_press(editor, y, &track);
+            }
+            return MouseAction::None;
+        }
+    }
+
     if rect_contains(&layout.editor_area, x, y) {
         handle_editor_click(editor, x, y, &layout.editor_area);
     }
 
     MouseAction::None
+}
+
+/// A press on the scrollbar column. It is the wheel with a handle: the cursor,
+/// the selection and the mode are all left exactly as they were.
+///
+/// A press on the thumb grabs it where it was pressed; a press anywhere else on
+/// the track centres the thumb under the pointer and carries on under the same
+/// rule, so the press and the drag that follows it cannot disagree.
+///
+/// No `MouseAction` comes back: scrolling is pure `Editor` state and `App` has
+/// nothing to decide, unlike a sidebar resize (which rewrites the config).
+fn handle_scrollbar_press(editor: &mut Editor, y: u16, track: &ratatui::layout::Rect) {
+    let line_count = scrollbar_line_count(editor);
+    let top_line = editor.active_view().map(|v| v.scroll.top_line).unwrap_or(0);
+    // Nothing to scroll: the click is swallowed rather than falling through to
+    // the text behind the column.
+    let Some((offset, length)) = crate::ui::scrollbar::thumb(track.height, line_count, top_line)
+    else {
+        return;
+    };
+
+    let row = y.saturating_sub(track.y);
+    if row >= offset && row < offset + length {
+        editor.scrollbar_drag = Some(row - offset);
+    } else {
+        let grab = length / 2;
+        editor.scrollbar_drag = Some(grab);
+        scroll_to_thumb(editor, y, track, grab);
+    }
+}
+
+/// Put the thumb where the pointer holds it and scroll to match.
+///
+/// The pointer routinely runs past the track's ends, so the offset is clamped
+/// rather than the event being dropped -- above the track pins to the first
+/// line, below it to the last screen.
+fn scroll_to_thumb(editor: &mut Editor, y: u16, track: &ratatui::layout::Rect, grab: u16) {
+    let line_count = scrollbar_line_count(editor);
+    let offset = y.saturating_sub(track.y).saturating_sub(grab);
+    let top_line = crate::ui::scrollbar::top_line_for_thumb(track.height, line_count, offset);
+    if let Some(view) = editor.active_view_mut() {
+        view.scroll.top_line = top_line;
+    }
+}
+
+fn scrollbar_line_count(editor: &Editor) -> usize {
+    editor
+        .active_document()
+        .map(|d| d.buffer.line_count())
+        .unwrap_or(0)
 }
 
 /// Put the divider under the cursor: the column dragged to becomes the
@@ -424,6 +495,16 @@ fn handle_scroll_down(editor: &mut Editor, _x: u16, _y: u16, _layout: &AppLayout
 }
 
 fn handle_drag(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) {
+    if let (Some(grab), Some(track)) = (editor.scrollbar_drag, layout.editor_scrollbar) {
+        // Same rule as the press. A popup cannot normally come up mid-drag, but
+        // the swallow belongs on the drag too: falling through to the text
+        // selection below would be a worse leak than doing nothing.
+        if !popup_is_up(editor) {
+            scroll_to_thumb(editor, y, &track, grab);
+        }
+        return;
+    }
+
     if editor.file_explorer.resizing.is_some() {
         resize_sidebar(editor, x, layout);
         return;
@@ -564,7 +645,8 @@ mod tests {
             sidebar_panel: None,
             editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
-            editor_area: Rect::new(20, 2, 60, 21),
+            editor_area: Rect::new(20, 2, 59, 21),
+            editor_scrollbar: Some(Rect::new(79, 2, 1, 21)),
             status_bar: Rect::new(0, 23, 80, 1),
         }
     }
@@ -581,7 +663,8 @@ mod tests {
             sidebar_panel: None,
             editor_panel: None,
             tab_bar: Rect::new(20, 1, 60, 1),
-            editor_area: Rect::new(20, 2, 60, 21),
+            editor_area: Rect::new(20, 2, 59, 21),
+            editor_scrollbar: Some(Rect::new(79, 2, 1, 21)),
             status_bar: Rect::new(0, 23, 80, 1),
         }
     }
@@ -699,6 +782,12 @@ mod tests {
     }
 
     /// An editor with a document long enough to scroll, parked partway down it.
+    ///
+    /// `area_height` is the scrollbar track's height, because in production the
+    /// two are the same number: `App` sets `view.area_height` from
+    /// `editor_area.height` and `compute_layout` carves the track out of the
+    /// same rows. A fixture where they differ would let the wheel's `max_top`
+    /// and the thumb's disagree here and nowhere else.
     fn editor_with_a_scrolled_document(name: &str) -> (Editor, std::path::PathBuf) {
         let dir = std::env::temp_dir().join("termcode-wheel-tests");
         std::fs::create_dir_all(&dir).unwrap();
@@ -708,7 +797,7 @@ mod tests {
         let mut editor = make_editor();
         editor.open_file(&path).unwrap();
         let view = editor.active_view_mut().unwrap();
-        view.area_height = 20;
+        view.area_height = scrollbar_track().height;
         view.scroll.top_line = 100;
         (editor, path)
     }
@@ -733,6 +822,39 @@ mod tests {
                 100,
                 "{mode:?} let the wheel through to the buffer"
             );
+        }
+    }
+
+    #[test]
+    fn a_popup_swallows_a_scrollbar_press_and_drag_the_same_way_it_swallows_the_wheel() {
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        for mode in [
+            EditorMode::Search,
+            EditorMode::FuzzyFinder,
+            EditorMode::CommandPalette,
+            EditorMode::Settings,
+        ] {
+            let (mut editor, _p) = editor_with_a_scrolled_document("popup-scrollbar");
+            editor.mode = mode;
+
+            let action = handle_mouse(&mut editor, press(track.x, track.y + 15), &layout);
+            assert!(matches!(action, MouseAction::None));
+            assert_eq!(
+                editor.scrollbar_drag, None,
+                "{mode:?} let the press grab the thumb"
+            );
+
+            handle_mouse(&mut editor, drag(track.x, track.y + 18), &layout);
+            handle_mouse(&mut editor, release(track.x, track.y + 18), &layout);
+
+            assert_eq!(
+                editor.active_view().unwrap().scroll.top_line,
+                100,
+                "{mode:?} let the scrollbar through to the buffer"
+            );
+            // Swallowed, not dismissed: the scrollbar never changes the mode.
+            assert_eq!(editor.mode, mode);
         }
     }
 
@@ -1032,5 +1154,186 @@ mod tests {
             MouseAction::None | MouseAction::OpenExplorerItem(_)
         ));
         assert_eq!(editor.mode, EditorMode::FileExplorer);
+    }
+
+    /// The reserved column of `layout_with_title()`.
+    fn scrollbar_track() -> Rect {
+        layout_with_title().editor_scrollbar.expect("a scrollbar")
+    }
+
+    /// An editor whose document is shorter than the viewport: nothing to scroll.
+    fn editor_with_a_short_document(name: &str) -> (Editor, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join("termcode-scrollbar-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.txt"));
+        std::fs::write(&path, "line\n".repeat(5)).unwrap();
+
+        let mut editor = make_editor();
+        editor.open_file(&path).unwrap();
+        editor.active_view_mut().unwrap().area_height = 21;
+        (editor, path)
+    }
+
+    #[test]
+    fn grabbing_the_thumb_and_dragging_it_scrolls_the_document() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("scrollbar-grab");
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        let lines = editor.active_document().unwrap().buffer.line_count();
+        let (offset, _) = crate::ui::scrollbar::thumb(track.height, lines, 100).unwrap();
+
+        // Pressing the thumb where it already is does not move the document.
+        handle_mouse(&mut editor, press(track.x, track.y + offset), &layout);
+        assert_eq!(
+            editor.scrollbar_drag,
+            Some(0),
+            "the grab point is remembered"
+        );
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 100);
+
+        handle_mouse(&mut editor, drag(track.x, track.y + offset + 5), &layout);
+        let expected = crate::ui::scrollbar::top_line_for_thumb(track.height, lines, offset + 5);
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, expected);
+        assert!(expected > 100, "dragging down scrolls down");
+
+        // The drag is not confined to the column: the pointer routinely leaves
+        // it, and the row is what the scroll follows. Dragging back to the row
+        // the thumb started on lands on that thumb offset's own top line --
+        // one thumb row covers many lines, so it is not necessarily line 100.
+        handle_mouse(&mut editor, drag(track.x - 30, track.y + offset), &layout);
+        let back = crate::ui::scrollbar::top_line_for_thumb(track.height, lines, offset);
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, back);
+        assert_eq!(
+            crate::ui::scrollbar::thumb(track.height, lines, back)
+                .unwrap()
+                .0,
+            offset,
+            "the thumb is back where it was grabbed"
+        );
+    }
+
+    #[test]
+    fn a_press_off_the_thumb_centres_it_under_the_pointer() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("scrollbar-jump");
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        let lines = editor.active_document().unwrap().buffer.line_count();
+
+        handle_mouse(&mut editor, press(track.x, track.y + 15), &layout);
+
+        let top = editor.active_view().unwrap().scroll.top_line;
+        let (_, length) = crate::ui::scrollbar::thumb(track.height, lines, top).unwrap();
+        assert_eq!(editor.scrollbar_drag, Some(length / 2));
+        let expected =
+            crate::ui::scrollbar::top_line_for_thumb(track.height, lines, 15 - length / 2);
+        assert_eq!(top, expected, "the thumb jumped to the pointer");
+
+        // The drag carries on under the same rule the press established.
+        handle_mouse(&mut editor, drag(track.x, track.y + 16), &layout);
+        let expected =
+            crate::ui::scrollbar::top_line_for_thumb(track.height, lines, 16 - length / 2);
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, expected);
+    }
+
+    #[test]
+    fn dragging_past_the_track_pins_to_the_first_line_and_the_last_screen() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("scrollbar-ends");
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        let lines = editor.active_document().unwrap().buffer.line_count();
+        let max_top = lines - track.height as usize;
+
+        handle_mouse(&mut editor, press(track.x, track.y + 10), &layout);
+
+        // Below the track: the last screen, exactly -- a drag that cannot quite
+        // reach the end is the classic scrollbar bug.
+        handle_mouse(
+            &mut editor,
+            drag(track.x, track.y + track.height + 40),
+            &layout,
+        );
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, max_top);
+
+        // The wheel agrees that this is the bottom. `View::scroll_down` clamps
+        // to `line_count - area_height` and the thumb to `line_count -
+        // track_height`; the two are the same rows in production, so a document
+        // dragged to the end must have nowhere left for the wheel to go.
+        editor.active_view_mut().unwrap().scroll_down(3, lines);
+        assert_eq!(
+            editor.active_view().unwrap().scroll.top_line,
+            max_top,
+            "the thumb's bottom and the wheel's bottom must be the same line"
+        );
+
+        // Above it, including above the whole frame.
+        handle_mouse(&mut editor, drag(track.x, 0), &layout);
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 0);
+    }
+
+    #[test]
+    fn a_press_with_nothing_to_scroll_is_swallowed() {
+        let (mut editor, _p) = editor_with_a_short_document("scrollbar-short");
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        editor.switch_mode(EditorMode::Normal);
+
+        let action = handle_left_click(&mut editor, track.x, track.y + 8, &layout);
+        assert!(matches!(action, MouseAction::None));
+        assert_eq!(editor.scrollbar_drag, None, "there is no thumb to grab");
+        assert_eq!(editor.active_view().unwrap().scroll.top_line, 0);
+        // Swallowed, not passed on to the text behind the column.
+        assert_eq!(editor.active_view().unwrap().cursor.line, 0);
+        assert_eq!(editor.active_view().unwrap().cursor.column, 0);
+    }
+
+    #[test]
+    fn the_scrollbar_never_moves_the_cursor_the_selection_or_the_mode() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("scrollbar-quiet");
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+        editor.switch_mode(EditorMode::Normal);
+        {
+            let view = editor.active_view_mut().unwrap();
+            view.cursor.line = 7;
+            view.cursor.column = 3;
+        }
+        let doc_id = editor.active_view().unwrap().doc_id;
+        let selection = editor.documents.get(&doc_id).unwrap().selection.clone();
+
+        handle_mouse(&mut editor, press(track.x, track.y + 15), &layout);
+        handle_mouse(&mut editor, drag(track.x, track.y + 18), &layout);
+        handle_mouse(&mut editor, release(track.x, track.y + 18), &layout);
+
+        assert_eq!(
+            editor.mode,
+            EditorMode::Normal,
+            "it is the wheel with a handle"
+        );
+        let view = editor.active_view().unwrap();
+        assert_eq!((view.cursor.line, view.cursor.column), (7, 3));
+        assert_eq!(
+            editor.documents.get(&doc_id).unwrap().selection.primary(),
+            selection.primary()
+        );
+        assert_eq!(editor.scrollbar_drag, None, "the release let go");
+    }
+
+    #[test]
+    fn a_new_press_clears_a_scrollbar_drag_whose_release_was_lost() {
+        let (mut editor, _p) = editor_with_a_scrolled_document("scrollbar-lost-up");
+        let layout = layout_with_title();
+        // As if the button had come up outside the terminal.
+        editor.scrollbar_drag = Some(0);
+
+        handle_mouse(&mut editor, press(40, 5), &layout);
+        assert!(editor.scrollbar_drag.is_none());
+
+        // The drag now selects text, as a drag from the editor area should.
+        handle_mouse(&mut editor, drag(50, 6), &layout);
+        assert_eq!(
+            editor.active_view().unwrap().scroll.top_line,
+            100,
+            "not stuck to the pointer"
+        );
     }
 }

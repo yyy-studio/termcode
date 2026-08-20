@@ -55,6 +55,7 @@ pane_active_fg = "base"
 pane_active_bg = "blue"
 pane_inactive_fg = "overlay0"
 pane_inactive_bg = "mantle"
+scrollbar_thumb = "surface1"
 
 [scopes]
 "attribute" = { fg = "yellow" }

@@ -23,6 +23,7 @@ use crate::ui::help_popup::HelpPopupWidget;
 use crate::ui::hover::HoverWidget;
 use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
+use crate::ui::scrollbar::{self, ScrollbarWidget};
 use crate::ui::search::SearchOverlayWidget;
 use crate::ui::settings::SettingsWidget;
 use crate::ui::status_bar::StatusBarWidget;
@@ -141,6 +142,27 @@ pub fn render(
             is_editor_active,
         );
         frame.render_widget(editor_widget, app_layout.editor_area);
+    }
+
+    // The column is reserved whatever the tab holds, so the branches with no
+    // thumb to draw -- an image tab, or no view at all -- still have to paint
+    // it. Not for staleness: ratatui resets the back buffer before every draw,
+    // so nothing from the last frame survives. It is that `Cell::reset` leaves
+    // `bg: Color::Reset`, which the backend emits as the *terminal's* default
+    // background -- an unpainted column would show as a vertical stripe beside
+    // the editor's own background.
+    if let Some(scrollbar_area) = app_layout.editor_scrollbar {
+        match (is_image_tab, editor.active_view(), editor.active_document()) {
+            (false, Some(view), Some(doc)) => {
+                let scrollbar = ScrollbarWidget::new(
+                    &editor.theme,
+                    doc.buffer.line_count(),
+                    view.scroll.top_line,
+                );
+                frame.render_widget(scrollbar, scrollbar_area);
+            }
+            _ => scrollbar::blank(&editor.theme, scrollbar_area, frame.buffer_mut()),
+        }
     }
 
     match editor.mode {

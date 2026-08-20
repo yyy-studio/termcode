@@ -47,7 +47,7 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 
 Every popup casts a shadow: `overlay::render_shadow` dims the band its
 rectangle would fall on, offset two columns right and one row down (two to one,
-because a cell is twice as tall as it is wide). It *dims* rather than fills, so
+because a cell is twice as tall as it is wide). It _dims_ rather than fills, so
 the text behind stays readable, and it is called from `render_overlay_frame` --
 a widget that draws its own frame (`confirm_dialog`, `help_popup`,
 `completion`, `hover`) calls it directly. `Indexed` and `Reset` colours have no
@@ -130,12 +130,12 @@ Plugins are sandboxed Lua scripts discovered from `~/.config/termcode/plugins/` 
 
 The Lua globals are `plugin`, `editor` and `log` (see `runtime/plugins/example/init.lua`) -- there is no `termcode` table.
 
-`on_before_save` fires *before* the write, so a handler that rewrites the
+`on_before_save` fires _before_ the write, so a handler that rewrites the
 buffer has its edit land in the saved file -- `on_save` fires after and cannot.
 A handler may itself queue `file.save`; `App.in_before_save` is what stops the
 two calling each other forever. The confirm dialog's Save+Close and Save-all
 name the document they are saving, and the whole plugin API reads and writes
-the *active* one, so those saves fire the hook only when the two coincide
+the _active_ one, so those saves fire the hook only when the two coincide
 (`dispatch_before_save_hook_for`).
 
 **Deferred actions:** Plugins cannot directly mutate app state. Instead, actions like `OpenFile` and `ExecuteCommand` are queued and processed after hook/command execution completes.
@@ -151,7 +151,7 @@ Images open in tabs alongside text documents via `TabContent::Image(ImageId)`. F
 ### Adding a New Theme
 
 1. Create `runtime/themes/my-theme.toml` following the structure in `one-dark.toml`
-2. Sections: `[meta]`, `[palette]`, `[ui]` (20 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides, plus the explorer toolbar's `new_file`/`new_folder`/`refresh`/`copy_path` glyphs)
+2. Sections: `[meta]`, `[palette]`, `[ui]` (21 color slots), `[scopes]` (syntax highlight scopes), `[icons]` + `[icons.extensions]` (optional file type emoji overrides, plus the explorer toolbar's `new_file`/`new_folder`/`refresh`/`copy_path` glyphs)
 3. Theme is automatically discovered by `list_available_themes()` scanning `runtime/themes/`
 
 ### Keymap Presets
@@ -382,13 +382,13 @@ not `canonicalize`, so symlinks stay unresolved): the editor is usually opened
 on `.`, and `Path::new(".").parent()` is the empty path, which lists nothing.
 
 Enter and the arrow keys do different things to a directory: Right expands it in
-place, keeping it inside the tree it belongs to, while Enter *enters* it --
+place, keeping it inside the tree it belongs to, while Enter _enters_ it --
 `navigate_into()` makes it the root. The mouse splits the row the same way: a
 single click on the `▶`/`▼` chevron expands (`MouseAction::ToggleExplorerExpand`),
 a double click anywhere else re-roots. `ui::file_explorer::chevron_span()` is the
 single source of the chevron's columns, shared by the widget and `mouse.rs`, and
 returns `None` where there is nothing to click -- a file, the `..` row, or
-`show_file_type_emoji = false`. Hit-testing is in *logical* columns
+`show_file_type_emoji = false`. Hit-testing is in _logical_ columns
 (`x - sidebar.x + scroll_left`), since the tree scrolls horizontally. Both re-rootings go through `set_root()`,
 which drops the old tree wholesale (its expansion state belongs to paths at a
 different depth) and lands the selection on the first real entry rather than on
@@ -407,7 +407,7 @@ under the styles that draw no border there.
 
 A `Drag` event says nothing about where the drag began, so the press is
 remembered in `FileExplorer.resizing` as the width at that moment. Keeping the
-*width* rather than a bool is what separates a press that resized from one that
+_width_ rather than a bool is what separates a press that resized from one that
 never moved: only the former returns `MouseAction::SidebarResized`, and only
 that writes `ui.sidebar_width` to the config file. A press always clears the
 field first, so an `Up` lost outside the terminal cannot leave the divider stuck
@@ -419,6 +419,52 @@ produce a width the other rejects.
 clipboard. The path is joined with the working directory rather than
 canonicalised, so symlinks stay unresolved and Windows' verbatim `\\?\` prefix
 never appears.
+
+### Editor Scrollbar
+
+`AppLayout::editor_scrollbar` is the single source of the scrollbar's columns --
+the last column of the rows below the tab bar, carved out of `editor_area` by
+`compute_layout` rather than subtracted inside `EditorViewWidget`. Everything
+that derives geometry from `editor_area` (`view.area_width`, the cursor clamp in
+`render.rs`, click and drag mapping in `mouse.rs`, `ensure_h_scroll`) is
+therefore correct with no arithmetic of its own, exactly as with
+`sidebar_divider`.
+
+The column is reserved whatever the tab holds and whether or not the document
+scrolls, so text never reflows when a document grows past the viewport or when
+switching between a short file, a long one and an image. Only the **thumb** is
+drawn (`THUMB_GLYPH`, one column); the track stays the editor background, and a
+document that fits the viewport gets no thumb at all -- a thumb filling the whole
+track reads as a scrollable document that will not move. The branches with
+nothing to draw still call `scrollbar::blank`, not against staleness (ratatui
+resets the back buffer before every draw) but for the _background_: `Cell::reset`
+leaves `bg: Color::Reset`, which the backend emits as the terminal's default, so
+an unpainted column would show as a vertical stripe beside the editor's own
+background.
+
+`ui::scrollbar::thumb` and its inverse `top_line_for_thumb` are shared by the
+widget and `mouse.rs`, and agree with `View::scroll_down` about `max_top`, so the
+wheel and the thumb cannot disagree about where the bottom is. Both endpoints are
+exact (top → offset 0, `max_top` → `offset + length == track_height`); the middle
+is approximate, and one thumb row covers many lines in a long document. A track
+one row tall is the one height where the thumb fills it and has nowhere to
+travel; `top_line_for_thumb` answers `0` there, because that is the line the
+thumb it would draw stands for.
+
+The press is tested **before** `editor_area` in `handle_left_click`, since the
+column is inside that region's columns -- otherwise a press on the thumb would
+place the cursor on the last visible character of a line. A press off the thumb
+centres it under the pointer and the drag carries on under the same rule; the
+grab point lives in `Editor.scrollbar_drag`, cleared on every `Down` so an `Up`
+lost outside the terminal cannot leave the thumb stuck to the pointer. Nothing
+here moves the cursor, the selection or the mode, and no `MouseAction` variant is
+involved: scrolling is pure `Editor` state and `App` has nothing to decide.
+
+A popup owns the column as it owns the wheel: `popup_is_up` guards the press and
+the drag alike, so a press on the scrollbar while the search bar, the fuzzy
+finder, the command palette or the settings screen is up moves nothing. It is
+swallowed rather than dismissing the popup -- the scrollbar does not change the
+mode, and closing one from a scroll gesture would.
 
 ### Confirm Dialog
 

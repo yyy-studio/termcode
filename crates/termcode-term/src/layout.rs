@@ -10,6 +10,9 @@ pub const MAX_SIDEBAR_WIDTH: u16 = 80;
 /// Columns the editor keeps whatever the frame's width, so the sidebar cannot
 /// be dragged over the whole terminal.
 pub const MIN_EDITOR_WIDTH: u16 = 20;
+/// Columns the editor's vertical scrollbar occupies. Reserved whatever the tab
+/// holds and whether or not the document scrolls, so text never reflows.
+pub const SCROLLBAR_WIDTH: u16 = 1;
 
 /// The width the sidebar may be dragged to in a frame this wide.
 pub fn clamp_sidebar_width(width: u16, frame_width: u16) -> u16 {
@@ -38,6 +41,11 @@ pub struct AppLayout {
     pub editor_panel: Option<Rect>,
     pub tab_bar: Rect,
     pub editor_area: Rect,
+    /// The columns the editor's vertical scrollbar is drawn in and dragged by --
+    /// the single source of its geometry, shared by `render.rs` and `mouse.rs`.
+    /// Always the last column of the rows below the tab bar, carved out of
+    /// `editor_area`; `None` only where the editor is too narrow to spare it.
+    pub editor_scrollbar: Option<Rect>,
     pub status_bar: Rect,
 }
 
@@ -184,6 +192,28 @@ pub fn compute_layout(
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(right_panel);
 
+    // The tab bar keeps its full width; only the rows below it give up the
+    // column, so `editor_area` stays the single source of the text geometry.
+    let text_area = right_split[1];
+    let (editor_area, editor_scrollbar) = if text_area.width > SCROLLBAR_WIDTH {
+        (
+            Rect::new(
+                text_area.x,
+                text_area.y,
+                text_area.width - SCROLLBAR_WIDTH,
+                text_area.height,
+            ),
+            Some(Rect::new(
+                text_area.x + text_area.width - SCROLLBAR_WIDTH,
+                text_area.y,
+                SCROLLBAR_WIDTH,
+                text_area.height,
+            )),
+        )
+    } else {
+        (text_area, None)
+    };
+
     AppLayout {
         frame: area,
         top_bar,
@@ -195,7 +225,8 @@ pub fn compute_layout(
         sidebar_panel,
         editor_panel,
         tab_bar: right_split[0],
-        editor_area: right_split[1],
+        editor_area,
+        editor_scrollbar,
         status_bar,
     }
 }
@@ -342,7 +373,8 @@ mod tests {
         let toolbar = layout.sidebar_toolbar.unwrap();
         assert_eq!(toolbar.width, 18);
         assert_eq!(layout.tab_bar.width, 58);
-        assert_eq!(layout.editor_area.width, 58);
+        // The tab bar keeps its width; the text area gives up the scrollbar column.
+        assert_eq!(layout.editor_area.width, 57);
     }
 
     #[test]
@@ -358,8 +390,71 @@ mod tests {
         let layout = compute_layout(area(), false, 20, PaneFocusStyle::TitleBar, true);
         assert!(layout.sidebar_panel.is_none());
         assert!(layout.editor_panel.is_some());
-        // Editor content inset
-        assert_eq!(layout.editor_area.width, 78); // 80 - 2
+        // Editor content inset, less the scrollbar column
+        assert_eq!(layout.editor_area.width, 77); // 80 - 2 borders - 1 scrollbar
+    }
+
+    #[test]
+    fn the_scrollbar_is_the_editor_areas_last_column_in_every_style() {
+        for style in [
+            PaneFocusStyle::TitleBar,
+            PaneFocusStyle::AccentLine,
+            PaneFocusStyle::Border,
+        ] {
+            for panel_borders in [false, true] {
+                for sidebar_visible in [false, true] {
+                    let layout = compute_layout(area(), sidebar_visible, 20, style, panel_borders);
+                    let bar = layout.editor_scrollbar.unwrap_or_else(|| {
+                        panic!("{style:?} borders={panel_borders} has a scrollbar")
+                    });
+                    let editor = layout.editor_area;
+                    assert_eq!(bar.width, SCROLLBAR_WIDTH, "{style:?}");
+                    assert_eq!(bar.x, editor.x + editor.width, "{style:?}");
+                    assert_eq!(bar.y, editor.y, "{style:?}");
+                    assert_eq!(bar.height, editor.height, "{style:?}");
+                    // It is below the tab bar, never on it.
+                    assert_eq!(bar.y, layout.tab_bar.y + 1, "{style:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_scrollbar_overlaps_nothing_else() {
+        for panel_borders in [false, true] {
+            let layout = compute_layout(area(), true, 20, PaneFocusStyle::TitleBar, panel_borders);
+            let bar = layout.editor_scrollbar.unwrap();
+            let sidebar = layout.sidebar.unwrap();
+            let divider = layout.sidebar_divider.unwrap();
+            assert!(bar.x >= layout.editor_area.x + layout.editor_area.width);
+            assert!(bar.x >= sidebar.x + sidebar.width);
+            assert_ne!(bar.x, divider.x);
+            assert!(bar.x < area().width);
+        }
+    }
+
+    #[test]
+    fn an_editor_too_narrow_keeps_its_column() {
+        // One column of editor left: there is nothing to spare.
+        let layout = compute_layout(
+            Rect::new(0, 0, 1, 24),
+            false,
+            0,
+            PaneFocusStyle::TitleBar,
+            false,
+        );
+        assert!(layout.editor_scrollbar.is_none());
+        assert_eq!(layout.editor_area.width, 1);
+
+        let layout = compute_layout(
+            Rect::new(0, 0, 0, 24),
+            false,
+            0,
+            PaneFocusStyle::TitleBar,
+            false,
+        );
+        assert!(layout.editor_scrollbar.is_none());
+        assert_eq!(layout.editor_area.width, 0);
     }
 
     #[test]

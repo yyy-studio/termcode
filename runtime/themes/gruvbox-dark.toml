@@ -50,6 +50,7 @@ pane_active_fg = "bg"
 pane_active_bg = "bright_blue"
 pane_inactive_fg = "gray"
 pane_inactive_bg = "bg0_h"
+scrollbar_thumb = "bg2"
 
 [scopes]
 "attribute" = { fg = "bright_aqua" }

@@ -38,6 +38,7 @@ pane_active_fg = "bg"
 pane_active_bg = "blue"
 pane_inactive_fg = "gutter"
 pane_inactive_bg = "#21252b"
+scrollbar_thumb = "gutter"
 
 [icons]
 directory_open = "▼"

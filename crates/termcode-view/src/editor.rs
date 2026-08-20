@@ -81,6 +81,12 @@ pub struct Editor {
     pub completion: CompletionState,
     pub hover: HoverState,
     pub help_visible: bool,
+    /// The row offset *inside* the scrollbar thumb where the press that started
+    /// the current drag landed, held for as long as the drag lasts. A `Drag`
+    /// event carries no memory of where it began, so the grab point is what has
+    /// to be remembered -- exactly as `FileExplorer.resizing` remembers the
+    /// width the divider was pressed at.
+    pub scrollbar_drag: Option<u16>,
     pub confirm_dialog: Option<ConfirmDialog>,
     pub clipboard: Option<Box<dyn ClipboardProvider>>,
     pub images: HashMap<ImageId, ImageEntry>,
@@ -132,6 +138,7 @@ impl Editor {
             completion: CompletionState::default(),
             hover: HoverState::default(),
             help_visible: false,
+            scrollbar_drag: None,
             confirm_dialog: None,
             clipboard: None,
             images: HashMap::new(),
