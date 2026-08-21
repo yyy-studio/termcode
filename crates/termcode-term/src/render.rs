@@ -308,7 +308,11 @@ fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u1
     }
     let col_offset = col_offset as u16;
 
-    let row = view.cursor.line.saturating_sub(view.scroll.top_line);
+    // The same rule vertically, and for the same reason: a cursor line above
+    // `top_line` used to saturate to 0 and name the first visible row, which
+    // the widget does not reverse either. The wheel reaches this one without
+    // moving the cursor at all.
+    let row = view.cursor.line.checked_sub(view.scroll.top_line)?;
     if row >= app_layout.editor_area.height as usize {
         return None;
     }
@@ -350,6 +354,16 @@ mod tests {
 
     fn editor_with_the_line(name: &str, tab_size: usize) -> (Editor, std::path::PathBuf) {
         editor_with_text(name, tab_size, LINE)
+    }
+
+    /// The same line, `count` times over, for the tests that scroll vertically.
+    fn editor_with_lines(
+        name: &str,
+        tab_size: usize,
+        count: usize,
+    ) -> (Editor, std::path::PathBuf) {
+        let text = vec![LINE; count].join("\n");
+        editor_with_text(name, tab_size, &text)
     }
 
     fn editor_with_text(name: &str, tab_size: usize, text: &str) -> (Editor, std::path::PathBuf) {
@@ -427,6 +441,34 @@ mod tests {
                          popup anchor and the drawn block are in different cells"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_popup_anchor_sits_on_the_cell_the_widget_reverses_at_every_top_line() {
+        // The claim is about both axes, so the vertical one is looped too: a
+        // cursor line above `top_line` is the case the horizontal test cannot
+        // reach with a one-line fixture, and the one a wheel scroll produces
+        // without touching the cursor.
+        let app_layout = layout();
+        let rows = app_layout.editor_area.height as usize;
+        let (mut editor, _p) = editor_with_lines("cursor-agreement-rows", 4, rows * 3);
+
+        for cursor_line in [0usize, 1, rows, rows * 2] {
+            for top_line in [0usize, 1, rows - 1, rows, rows * 2] {
+                {
+                    let view = editor.active_view_mut().unwrap();
+                    view.cursor.line = cursor_line;
+                    view.cursor.column = 3;
+                    view.scroll.top_line = top_line;
+                }
+                assert_eq!(
+                    cursor_screen_position(&editor, &app_layout),
+                    reversed_cell(&editor, &app_layout),
+                    "cursor_line={cursor_line} top_line={top_line}: the popup anchor \
+                     and the drawn block are in different cells"
+                );
             }
         }
     }
