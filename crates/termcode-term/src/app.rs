@@ -541,6 +541,47 @@ impl App {
         }
     }
 
+    /// One event, and then the state the event after it will read.
+    ///
+    /// The size comes from `App.terminal_size` rather than from the terminal:
+    /// asking the terminal is a syscall, and this runs per event rather than
+    /// per frame. The field is written by every `sync_viewport_metrics` and by
+    /// `AppEvent::Resize`, which is the only thing that can change the answer
+    /// between two frames -- so it is current here for the same reason the
+    /// mouse's hit-testing can trust it.
+    fn process_and_settle(&mut self, event: AppEvent) {
+        self.process_event(event);
+        let (width, height) = self.terminal_size;
+        self.settle(ratatui::layout::Size::new(width, height));
+    }
+
+    /// Everything an event can invalidate, put right again.
+    ///
+    /// Called after **every** event rather than once before the frame, because
+    /// both of the things it settles are read by the *next event*, not only by
+    /// the draw. Events arrive in batches -- the coalescing loop takes
+    /// everything the terminal already has before drawing anything -- so a
+    /// wheel notch and the `Enter` behind it are handled with no frame in
+    /// between. Settling per frame let that `Enter` see a completion popup that
+    /// the wheel had already stranded off screen, and let a resize correction
+    /// land on top of a scroll the user performed after the resize, undoing it.
+    ///
+    /// Settling is not drawing: this costs the batch nothing in frames, and
+    /// neither half does any work in the ordinary case -- the metrics only
+    /// correct when the viewport actually changed shape, and the dismissal
+    /// returns immediately when no popup is open.
+    fn settle(&mut self, size: ratatui::layout::Size) {
+        self.sync_viewport_metrics(size);
+        // After the correction, never before it. The correction gets first
+        // refusal, so a resize does *not* close a popup -- it brings the cursor
+        // back and the anchor with it -- and only a real scroll away from the
+        // cursor (wheel, scrollbar drag, scrollbar press) closes one, which is
+        // the case where there is nothing left on screen to point at. Swapping
+        // these two lines is a behaviour change, and
+        // `a_resize_does_not_close_a_completion_popup` catches it.
+        self.dismiss_popups_without_a_cursor();
+    }
+
     /// Everything that happens between the last event and the next frame, in
     /// the one order it happens in.
     ///
@@ -561,15 +602,7 @@ impl App {
         // The terminal's own answer, not an `AppEvent::Resize` payload: the
         // event is coalesced with others and this is the size the draw below
         // will actually use.
-        self.sync_viewport_metrics(terminal.size()?);
-        // After the correction, never before it. The correction gets first
-        // refusal, so a resize does *not* close a popup -- it brings the cursor
-        // back and the anchor with it -- and only a real scroll away from the
-        // cursor (wheel, scrollbar drag, scrollbar press) closes one, which is
-        // the case where there is nothing left on screen to point at. Swapping
-        // these two lines is a behaviour change, and
-        // `a_resize_does_not_close_a_completion_popup` catches it.
-        self.dismiss_popups_without_a_cursor();
+        self.settle(terminal.size()?);
         self.editor.sync_tab_modified();
         terminal.draw(|frame| {
             render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
@@ -604,7 +637,7 @@ impl App {
                 }
 
                 let event = self.event_handler.next()?;
-                self.process_event(event);
+                self.process_and_settle(event);
 
                 // Then everything else the terminal already has waiting, before
                 // drawing anything. A wheel flick arrives as one burst -- the
@@ -618,7 +651,7 @@ impl App {
                     let Some(event) = self.event_handler.try_next()? else {
                         break;
                     };
-                    self.process_event(event);
+                    self.process_and_settle(event);
                     coalesced += 1;
                 }
 
@@ -3311,6 +3344,96 @@ mod tests {
             row: 10,
             modifiers: KeyModifiers::NONE,
         }));
+    }
+
+    /// The wheel and the `Enter` behind it, with no frame in between.
+    ///
+    /// Events arrive in batches: the coalescing loop takes everything the
+    /// terminal already has before drawing anything, so a wheel notch and a
+    /// keystroke typed a moment later are handled back to back. Settling once
+    /// before the frame therefore came too late -- `handle_completion_popup_key`
+    /// still saw `visible == true` and accepted an item that had been off
+    /// screen since the notch before it. `process_and_settle` is what the loop
+    /// calls per event, so this is that path and not a copy of its order.
+    #[test]
+    fn a_key_coalesced_behind_the_wheel_cannot_accept_a_stranded_completion() {
+        let (mut app, _f) = app_with_a_visible_completion("coalesced-enter");
+        // `handle_completion_popup_key` answers only in Insert, and `run()` --
+        // which is what settles the resting mode -- is not reachable from a
+        // test. Without this the `Enter` below never reaches the completion at
+        // all and the assertion passes for the wrong reason.
+        app.editor.switch_mode(EditorMode::Insert);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert!(frame_contains(&terminal, POPUP_LABEL));
+
+        // Not "the buffer is unchanged": with the popup gone, `Enter` is a
+        // keystroke like any other and inserts a newline. What must not happen
+        // is the *completion* being accepted.
+
+        // One batch, no frame between the two: the wheel strands the popup and
+        // `Enter` arrives while it is still flagged visible.
+        app.process_and_settle(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.process_and_settle(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let after: String = app.editor.active_document().unwrap().buffer.text().into();
+        assert!(
+            !after.contains(POPUP_INSERT),
+            "`Enter` accepted a completion the wheel had already scrolled away from"
+        );
+        assert!(
+            !app.editor.completion.visible,
+            "the popup was still flagged visible when the key arrived"
+        );
+    }
+
+    /// A resize and a wheel notch in one batch, in that order.
+    ///
+    /// The correction belongs to the resize, and the scroll that came *after*
+    /// it is the user's. Settling once at the end of the batch ran the
+    /// correction against the post-wheel position and pulled it back toward the
+    /// cursor, undoing a gesture the user had already made.
+    #[test]
+    fn a_wheel_coalesced_behind_a_resize_keeps_the_scroll_it_asked_for() {
+        let (mut app, _f) = app_with_a_visible_completion("coalesced-wheel");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        // The cursor stays at the top of the document, so the correction has
+        // somewhere to pull `top_line` back to if it runs too late.
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert_eq!(app.editor.active_view().unwrap().scroll.top_line, 0);
+
+        terminal.backend_mut().resize(60, 16);
+        app.process_and_settle(AppEvent::Resize(60, 16));
+        let settled = app.editor.active_view().unwrap().scroll.top_line;
+
+        app.process_and_settle(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }));
+        let scrolled = app.editor.active_view().unwrap().scroll.top_line;
+        assert!(
+            scrolled > settled,
+            "the wheel did not move the view, so this proves nothing"
+        );
+
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert_eq!(
+            app.editor.active_view().unwrap().scroll.top_line,
+            scrolled,
+            "the resize correction ran after the wheel and undid it"
+        );
     }
 
     /// The wheel scrolls the cursor off the top of the screen, and the popup
