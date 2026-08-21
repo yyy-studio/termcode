@@ -13,6 +13,11 @@ pub const MIN_EDITOR_WIDTH: u16 = 20;
 /// Columns the editor's vertical scrollbar occupies. Reserved whatever the tab
 /// holds and whether or not the document scrolls, so text never reflows.
 pub const SCROLLBAR_WIDTH: u16 = 1;
+/// Rows the editor's horizontal scrollbar occupies. Reserved on exactly the
+/// same terms as the column: whatever the tab holds and whether or not any line
+/// overflows, so text never reflows vertically when a long line scrolls into
+/// view or a tab is switched.
+pub const HSCROLLBAR_HEIGHT: u16 = 1;
 
 /// The width the sidebar may be dragged to in a frame this wide.
 pub fn clamp_sidebar_width(width: u16, frame_width: u16) -> u16 {
@@ -45,8 +50,39 @@ pub struct AppLayout {
     /// the single source of its geometry, shared by `render.rs` and `mouse.rs`.
     /// Always the last column of the rows below the tab bar, carved out of
     /// `editor_area`; `None` only where the editor is too narrow to spare it.
+    ///
+    /// Its height is `editor_area.height`, **not** the full text region: the
+    /// thumb's `max_top` and `View::scroll_down`'s must be the same number, or
+    /// a drag to the bottom of the track and a wheel to the bottom of the
+    /// document land one line apart.
     pub editor_scrollbar: Option<Rect>,
+    /// The whole row the editor's horizontal scrollbar is reserved in -- the
+    /// single source of its geometry, shared by `render.rs` and `mouse.rs`.
+    /// Always the last row of the rows below the tab bar, carved out of
+    /// `editor_area` and spanning its columns (so the corner where the two bars
+    /// would meet is excluded by construction); `None` only where the editor is
+    /// too short to spare it.
+    ///
+    /// This is the row, not the track: the gutter does not scroll and so has no
+    /// track, and its width depends on the line count, which is not known here.
+    /// `ui::scrollbar::h_track` turns the row into the track.
+    pub editor_hscrollbar: Option<Rect>,
     pub status_bar: Rect,
+}
+
+impl AppLayout {
+    /// The 1x1 cell where the reserved row meets the reserved column. It
+    /// belongs to neither track, and is painted blank.
+    ///
+    /// Derived from the two rects rather than stored as a fourth field: it
+    /// cannot then go out of sync with the rects it is cut from, and the two
+    /// literal `AppLayout` constructions in `mouse.rs`'s tests do not grow
+    /// again.
+    pub fn editor_scrollbar_corner(&self) -> Option<Rect> {
+        let bar = self.editor_scrollbar?;
+        let hbar = self.editor_hscrollbar?;
+        Some(Rect::new(bar.x, hbar.y, bar.width, hbar.height))
+    }
 }
 
 pub fn compute_layout(
@@ -192,27 +228,52 @@ pub fn compute_layout(
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(right_panel);
 
-    // The tab bar keeps its full width; only the rows below it give up the
-    // column, so `editor_area` stays the single source of the text geometry.
+    // The tab bar keeps its full width and height; only the rows below it give
+    // up the column and the row, so `editor_area` stays the single source of
+    // the text geometry -- `App` feeds `view.area_height`/`area_width` from it,
+    // `render.rs` clamps the cursor against it and `mouse.rs` hit-tests it, so
+    // carving here is what makes all of them right at once.
+    //
+    // The two guards are independent: a frame can be wide enough to spare a
+    // column and too short to spare a row, and vice versa.
     let text_area = right_split[1];
-    let (editor_area, editor_scrollbar) = if text_area.width > SCROLLBAR_WIDTH {
-        (
-            Rect::new(
-                text_area.x,
-                text_area.y,
-                text_area.width - SCROLLBAR_WIDTH,
-                text_area.height,
-            ),
-            Some(Rect::new(
-                text_area.x + text_area.width - SCROLLBAR_WIDTH,
-                text_area.y,
-                SCROLLBAR_WIDTH,
-                text_area.height,
-            )),
+    let has_bar = text_area.width > SCROLLBAR_WIDTH;
+    let has_hbar = text_area.height > HSCROLLBAR_HEIGHT;
+    let editor_area = Rect::new(
+        text_area.x,
+        text_area.y,
+        if has_bar {
+            text_area.width - SCROLLBAR_WIDTH
+        } else {
+            text_area.width
+        },
+        if has_hbar {
+            text_area.height - HSCROLLBAR_HEIGHT
+        } else {
+            text_area.height
+        },
+    );
+    // The vertical track is `editor_area.height` tall, not `text_area.height`:
+    // it loses the reserved row with the text, so the corner belongs to neither
+    // bar. Giving it to the vertical bar would leave the track one row taller
+    // than `view.area_height`, and the thumb's bottom and the wheel's would
+    // differ by exactly one line.
+    let editor_scrollbar = has_bar.then(|| {
+        Rect::new(
+            text_area.x + text_area.width - SCROLLBAR_WIDTH,
+            text_area.y,
+            SCROLLBAR_WIDTH,
+            editor_area.height,
         )
-    } else {
-        (text_area, None)
-    };
+    });
+    let editor_hscrollbar = has_hbar.then(|| {
+        Rect::new(
+            text_area.x,
+            text_area.y + text_area.height - HSCROLLBAR_HEIGHT,
+            editor_area.width,
+            HSCROLLBAR_HEIGHT,
+        )
+    });
 
     AppLayout {
         frame: area,
@@ -227,6 +288,7 @@ pub fn compute_layout(
         tab_bar: right_split[0],
         editor_area,
         editor_scrollbar,
+        editor_hscrollbar,
         status_bar,
     }
 }
@@ -373,8 +435,10 @@ mod tests {
         let toolbar = layout.sidebar_toolbar.unwrap();
         assert_eq!(toolbar.width, 18);
         assert_eq!(layout.tab_bar.width, 58);
-        // The tab bar keeps its width; the text area gives up the scrollbar column.
+        // The tab bar keeps its width; the text area gives up the scrollbar
+        // column, and the row below it to the horizontal bar.
         assert_eq!(layout.editor_area.width, 57);
+        assert_eq!(layout.editor_area.height, 18);
     }
 
     #[test]
@@ -390,8 +454,9 @@ mod tests {
         let layout = compute_layout(area(), false, 20, PaneFocusStyle::TitleBar, true);
         assert!(layout.sidebar_panel.is_none());
         assert!(layout.editor_panel.is_some());
-        // Editor content inset, less the scrollbar column
+        // Editor content inset, less the scrollbar column and the scrollbar row
         assert_eq!(layout.editor_area.width, 77); // 80 - 2 borders - 1 scrollbar
+        assert_eq!(layout.editor_area.height, 18); // 24 - top - status - 2 borders - tab - 1
     }
 
     #[test]
@@ -411,6 +476,12 @@ mod tests {
                     assert_eq!(bar.width, SCROLLBAR_WIDTH, "{style:?}");
                     assert_eq!(bar.x, editor.x + editor.width, "{style:?}");
                     assert_eq!(bar.y, editor.y, "{style:?}");
+                    // The `max_top` invariant: `view.area_height` is fed from
+                    // `editor_area`, and both `ui::scrollbar::thumb` and
+                    // `View::scroll_down` derive the last reachable top line
+                    // from it. A track taller than the text area -- which is
+                    // what widening it back over the corner would do -- makes
+                    // the thumb's bottom and the wheel's differ by one line.
                     assert_eq!(bar.height, editor.height, "{style:?}");
                     // It is below the tab bar, never on it.
                     assert_eq!(bar.y, layout.tab_bar.y + 1, "{style:?}");
@@ -455,6 +526,99 @@ mod tests {
         );
         assert!(layout.editor_scrollbar.is_none());
         assert_eq!(layout.editor_area.width, 0);
+    }
+
+    #[test]
+    fn the_hscrollbar_is_the_editor_areas_last_row_in_every_style() {
+        for style in [
+            PaneFocusStyle::TitleBar,
+            PaneFocusStyle::AccentLine,
+            PaneFocusStyle::Border,
+        ] {
+            for panel_borders in [false, true] {
+                for sidebar_visible in [false, true] {
+                    let layout = compute_layout(area(), sidebar_visible, 20, style, panel_borders);
+                    let bar = layout.editor_hscrollbar.unwrap_or_else(|| {
+                        panic!("{style:?} borders={panel_borders} has an h-scrollbar")
+                    });
+                    let editor = layout.editor_area;
+                    assert_eq!(bar.height, HSCROLLBAR_HEIGHT, "{style:?}");
+                    assert_eq!(bar.y, editor.y + editor.height, "{style:?}");
+                    assert_eq!(bar.x, editor.x, "{style:?}");
+                    // It spans the editor's columns only: the corner where it
+                    // would meet the vertical bar is excluded here rather than
+                    // being subtracted again by `h_track`.
+                    assert_eq!(bar.width, editor.width, "{style:?}");
+                    // It is below the tab bar, never on it.
+                    assert!(bar.y > layout.tab_bar.y, "{style:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_bars_and_the_corner_are_pairwise_disjoint() {
+        for panel_borders in [false, true] {
+            let layout = compute_layout(area(), true, 20, PaneFocusStyle::TitleBar, panel_borders);
+            let bar = layout.editor_scrollbar.unwrap();
+            let hbar = layout.editor_hscrollbar.unwrap();
+            let corner = layout.editor_scrollbar_corner().unwrap();
+
+            // The column stops above the row, the row stops left of the column.
+            assert_eq!(bar.y + bar.height, hbar.y);
+            assert_eq!(hbar.x + hbar.width, bar.x);
+            // The corner is the one cell neither of them covers.
+            assert_eq!(corner, Rect::new(bar.x, hbar.y, 1, 1));
+            assert!(corner.y >= bar.y + bar.height);
+            assert!(corner.x >= hbar.x + hbar.width);
+            // And none of the three is inside the text area.
+            let editor = layout.editor_area;
+            assert!(bar.x >= editor.x + editor.width);
+            assert!(hbar.y >= editor.y + editor.height);
+        }
+    }
+
+    #[test]
+    fn an_editor_too_short_keeps_its_row() {
+        // Top bar, status bar, tab bar and one text row: nothing to spare.
+        let layout = compute_layout(
+            Rect::new(0, 0, 80, 4),
+            false,
+            0,
+            PaneFocusStyle::TitleBar,
+            false,
+        );
+        assert!(layout.editor_hscrollbar.is_none());
+        assert_eq!(layout.editor_area.height, 1);
+        assert_eq!(layout.editor_scrollbar.unwrap().height, 1);
+        assert!(layout.editor_scrollbar_corner().is_none());
+    }
+
+    #[test]
+    fn the_two_carves_are_independent() {
+        // Too narrow for the column, tall enough for the row.
+        let layout = compute_layout(
+            Rect::new(0, 0, 1, 24),
+            false,
+            0,
+            PaneFocusStyle::TitleBar,
+            false,
+        );
+        assert!(layout.editor_scrollbar.is_none());
+        let hbar = layout.editor_hscrollbar.expect("the row still fits");
+        assert_eq!(hbar.width, layout.editor_area.width);
+        assert!(layout.editor_scrollbar_corner().is_none());
+
+        // Wide enough for the column, too short for the row.
+        let layout = compute_layout(
+            Rect::new(0, 0, 80, 4),
+            false,
+            0,
+            PaneFocusStyle::TitleBar,
+            false,
+        );
+        assert!(layout.editor_scrollbar.is_some());
+        assert!(layout.editor_hscrollbar.is_none());
     }
 
     #[test]

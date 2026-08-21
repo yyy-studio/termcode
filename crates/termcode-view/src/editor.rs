@@ -31,6 +31,48 @@ pub enum EditorMode {
     Settings,
 }
 
+/// A scrollbar drag in progress, and which bar it belongs to.
+///
+/// `grab` is the offset *inside* the thumb where the press landed -- rows down
+/// it for the vertical bar, columns across it for the horizontal one -- so the
+/// thumb keeps its grip on the pointer instead of jumping under it.
+///
+/// It is only the grip this fixes. How far the thumb then travels is the
+/// frontend's business: the horizontal bar measures a bounded number of columns
+/// per screen (`ui::scrollbar::SCAN_BUDGET`), so on a line wider than that the
+/// pointer can reach the end of the track without the view reaching the end of
+/// the line.
+///
+/// `grab` is all either arm carries, because on both axes the scroll total is a
+/// function of things a drag does not write. Vertically it is the document's
+/// line count; horizontally it is the widest line on screen
+/// (`ui::scrollbar::content_width`), which depends on the document, the top
+/// line, the viewport height and the track width -- and on nothing a horizontal
+/// drag touches, since such a drag writes `left_col` and only `left_col`. The
+/// mapping from pointer column to `left_col` is therefore one fixed linear
+/// function from the press to the release without anything being remembered,
+/// and a held pointer settles on the *first* event.
+///
+/// An earlier design floored the horizontal total at `left_col + code_width`,
+/// which made the total depend on the very field the drag wrote, and then
+/// latched the total here to break the feedback. Both are gone: the floor
+/// created the loop, the latch papered over it, and a latch is state with a
+/// lifetime -- an `Up` lost outside the terminal left it behind to be drawn
+/// through on a later frame.
+///
+/// One field rather than two `Option`s, because a pointer has one button
+/// and a drag has one axis: two independent fields would make "dragging both
+/// bars at once" representable, and force `handle_drag` to pick an order
+/// between two things that must never both be set.
+///
+/// Plain data -- `termcode-view` is frontend-agnostic and may not name ratatui
+/// or crossterm types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarDrag {
+    Vertical { grab: u16 },
+    Horizontal { grab: u16 },
+}
+
 /// A simplified completion item for display (no dependency on lsp-types).
 #[derive(Debug, Clone)]
 pub struct CompletionItem {
@@ -81,12 +123,11 @@ pub struct Editor {
     pub completion: CompletionState,
     pub hover: HoverState,
     pub help_visible: bool,
-    /// The row offset *inside* the scrollbar thumb where the press that started
-    /// the current drag landed, held for as long as the drag lasts. A `Drag`
-    /// event carries no memory of where it began, so the grab point is what has
-    /// to be remembered -- exactly as `FileExplorer.resizing` remembers the
-    /// width the divider was pressed at.
-    pub scrollbar_drag: Option<u16>,
+    /// The scrollbar drag in progress, if any. A `Drag` event carries no memory
+    /// of where it began, so the grab point is what has to be remembered --
+    /// exactly as `FileExplorer.resizing` remembers the width the divider was
+    /// pressed at.
+    pub scrollbar_drag: Option<ScrollbarDrag>,
     pub confirm_dialog: Option<ConfirmDialog>,
     pub clipboard: Option<Box<dyn ClipboardProvider>>,
     pub images: HashMap<ImageId, ImageEntry>,

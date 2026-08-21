@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 
-use termcode_term::ui::scrollbar::{self, ScrollbarWidget, thumb, top_line_for_thumb};
+use termcode_term::ui::scrollbar::{self, ScrollbarWidget, offset_for_thumb, thumb};
 use termcode_theme::theme::Theme;
 
 const TRACK: Rect = Rect {
@@ -107,7 +107,7 @@ fn dragging_the_thumb_and_reading_it_back_agree() {
         TRACK.height - length
     };
     for offset in 0..=travel {
-        let top = top_line_for_thumb(TRACK.height, 500, offset);
+        let top = offset_for_thumb(TRACK.height, 500, offset);
         let rows = thumb_rows(&render(500, top));
         assert_eq!(rows[0], TRACK.y + offset, "offset {offset} -> top {top}");
     }

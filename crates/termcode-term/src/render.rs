@@ -23,7 +23,7 @@ use crate::ui::help_popup::HelpPopupWidget;
 use crate::ui::hover::HoverWidget;
 use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
-use crate::ui::scrollbar::{self, ScrollbarWidget};
+use crate::ui::scrollbar::{self, HScrollbarWidget, ScrollbarWidget};
 use crate::ui::search::SearchOverlayWidget;
 use crate::ui::settings::SettingsWidget;
 use crate::ui::status_bar::StatusBarWidget;
@@ -144,13 +144,13 @@ pub fn render(
         frame.render_widget(editor_widget, app_layout.editor_area);
     }
 
-    // The column is reserved whatever the tab holds, so the branches with no
-    // thumb to draw -- an image tab, or no view at all -- still have to paint
-    // it. Not for staleness: ratatui resets the back buffer before every draw,
-    // so nothing from the last frame survives. It is that `Cell::reset` leaves
-    // `bg: Color::Reset`, which the backend emits as the *terminal's* default
-    // background -- an unpainted column would show as a vertical stripe beside
-    // the editor's own background.
+    // The column and the row are reserved whatever the tab holds, so the
+    // branches with no thumb to draw -- an image tab, or no view at all --
+    // still have to paint them. Not for staleness: ratatui resets the back
+    // buffer before every draw, so nothing from the last frame survives. It is
+    // that `Cell::reset` leaves `bg: Color::Reset`, which the backend emits as
+    // the *terminal's* default background -- an unpainted column would show as
+    // a vertical stripe beside the editor's own background.
     if let Some(scrollbar_area) = app_layout.editor_scrollbar {
         match (is_image_tab, editor.active_view(), editor.active_document()) {
             (false, Some(view), Some(doc)) => {
@@ -163,6 +163,41 @@ pub fn render(
             }
             _ => scrollbar::blank(&editor.theme, scrollbar_area, frame.buffer_mut()),
         }
+    }
+
+    if let Some(row) = app_layout.editor_hscrollbar {
+        // The whole row first, so the gutter columns -- which have no track,
+        // because the gutter does not scroll -- get the editor's background
+        // whether or not there is a thumb to draw beside them.
+        scrollbar::blank(&editor.theme, row, frame.buffer_mut());
+
+        if let (false, Some(view), Some(doc)) =
+            (is_image_tab, editor.active_view(), editor.active_document())
+        {
+            let gutter_width = crate::ui::editor_view::line_number_width_styled(
+                doc.buffer.line_count(),
+                editor.config.line_numbers,
+            );
+            if let Some(track) = scrollbar::h_track(row, gutter_width) {
+                // `hscroll_total` and not `content_width` spelled out again:
+                // `mouse.rs` maps the pointer through the very same function,
+                // so the thumb drawn is the thumb being held. The number does
+                // not depend on `left_col`, which is the only thing a drag
+                // writes, so this frame agrees with the one before it and with
+                // the one after the button comes up.
+                let total = scrollbar::hscroll_total(editor, track.width as usize);
+                let hscrollbar = HScrollbarWidget::new(&editor.theme, total, view.scroll.left_col);
+                frame.render_widget(hscrollbar, track);
+            }
+        }
+    }
+
+    // The one cell where the row meets the column belongs to neither track --
+    // and for the same reason as above, it has to be painted rather than left
+    // alone, or it shows as a notch of the terminal's own background in the
+    // corner of the editor.
+    if let Some(corner) = app_layout.editor_scrollbar_corner() {
+        scrollbar::blank(&editor.theme, corner, frame.buffer_mut());
     }
 
     match editor.mode {

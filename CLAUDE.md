@@ -420,51 +420,134 @@ clipboard. The path is joined with the working directory rather than
 canonicalised, so symlinks stay unresolved and Windows' verbatim `\\?\` prefix
 never appears.
 
-### Editor Scrollbar
+### Editor Scrollbars
 
-`AppLayout::editor_scrollbar` is the single source of the scrollbar's columns --
-the last column of the rows below the tab bar, carved out of `editor_area` by
-`compute_layout` rather than subtracted inside `EditorViewWidget`. Everything
-that derives geometry from `editor_area` (`view.area_width`, the cursor clamp in
-`render.rs`, click and drag mapping in `mouse.rs`, `ensure_h_scroll`) is
-therefore correct with no arithmetic of its own, exactly as with
-`sidebar_divider`.
+`AppLayout::editor_scrollbar` and `AppLayout::editor_hscrollbar` are the single
+source of the two bars' geometry -- the last column and the last row of the
+region below the tab bar, both carved out of `editor_area` by `compute_layout`
+rather than subtracted inside `EditorViewWidget`. Everything that derives
+geometry from `editor_area` (`view.area_height`/`area_width`, the cursor clamp in
+`render.rs`, click and drag mapping in `mouse.rs`, `cmd_page_up/down`,
+`ensure_h_scroll`) is therefore correct with no arithmetic of its own, exactly as
+with `sidebar_divider`.
 
-The column is reserved whatever the tab holds and whether or not the document
-scrolls, so text never reflows when a document grows past the viewport or when
-switching between a short file, a long one and an image. Only the **thumb** is
-drawn (`THUMB_GLYPH`, one column); the track stays the editor background, and a
-document that fits the viewport gets no thumb at all -- a thumb filling the whole
-track reads as a scrollable document that will not move. The branches with
-nothing to draw still call `scrollbar::blank`, not against staleness (ratatui
-resets the back buffer before every draw) but for the _background_: `Cell::reset`
+The two carves are independent guards -- a frame can be wide enough to spare a
+column and too short to spare a row -- and the vertical track is
+`editor_area.height` tall, **not** the full text region. That is load-bearing:
+`ui::scrollbar::thumb`'s `max_offset` and `View::scroll_down`'s `max_top` are the
+same number only while the track and `view.area_height` are. Widening the track
+back over the corner would make a drag to the bottom of the track stop one line
+short of where the wheel gets to. The 1x1 corner where the two would meet
+therefore belongs to neither, and `AppLayout::editor_scrollbar_corner()` derives
+it from the two rects.
+
+Both are reserved whatever the tab holds and whether or not anything overflows,
+so text never reflows -- not vertically when a long line scrolls into view, not
+horizontally when switching between a short file, a long one and an image. Only
+the **thumb** is drawn (`THUMB_GLYPH` / `H_THUMB_GLYPH`, one cell each); the
+track stays the editor background, and content that fits gets no thumb at all --
+a thumb filling the whole track reads as scrollable content that will not move.
+The branches with nothing to draw still call `scrollbar::blank`, and so do the
+row's gutter columns and the corner: not against staleness (ratatui resets the
+back buffer before every draw) but for the _background_, because `Cell::reset`
 leaves `bg: Color::Reset`, which the backend emits as the terminal's default, so
-an unpainted column would show as a vertical stripe beside the editor's own
+an unpainted region would show as a stripe or a notch beside the editor's own
 background.
 
-`ui::scrollbar::thumb` and its inverse `top_line_for_thumb` are shared by the
-widget and `mouse.rs`, and agree with `View::scroll_down` about `max_top`, so the
-wheel and the thumb cannot disagree about where the bottom is. Both endpoints are
-exact (top → offset 0, `max_top` → `offset + length == track_height`); the middle
-is approximate, and one thumb row covers many lines in a long document. A track
-one row tall is the one height where the thumb fills it and has nowhere to
-travel; `top_line_for_thumb` answers `0` there, because that is the line the
-thumb it would draw stands for.
+`ui::scrollbar::thumb` and its inverse `offset_for_thumb` are **axis-neutral**
+and shared by both widgets and by `mouse.rs`: `total` is however many units of
+content there are, `offset` how far in the viewport starts. Both endpoints are
+exact (start → offset 0, `max_offset` → `offset + length == track_len`); the
+middle is approximate, and one thumb cell covers many lines or columns. A track
+one cell long is the degenerate case where the thumb fills it and has nowhere to
+travel -- reachable far more easily horizontally, from a wide gutter in a narrow
+pane -- and `offset_for_thumb` answers `0` there, because that is what the thumb
+it would draw stands for.
 
-The press is tested **before** `editor_area` in `handle_left_click`, since the
-column is inside that region's columns -- otherwise a press on the thumb would
-place the cursor on the last visible character of a line. A press off the thumb
-centres it under the pointer and the drag carries on under the same rule; the
-grab point lives in `Editor.scrollbar_drag`, cleared on every `Down` so an `Up`
-lost outside the terminal cannot leave the thumb stuck to the pointer. Nothing
-here moves the cursor, the selection or the mode, and no `MouseAction` variant is
-involved: scrolling is pure `Editor` state and `App` has nothing to decide.
+The horizontal track covers the **code area only**: `ui::scrollbar::h_track(row,
+gutter_width)` drops the gutter and its separator column, because the gutter does
+not scroll. The row is the whole reserved strip and the track is what is left of
+it; `compute_layout` cannot cut the track itself, since the gutter width depends
+on the line count.
 
-A popup owns the column as it owns the wheel: `popup_is_up` guards the press and
-the drag alike, so a press on the scrollbar while the search bar, the fuzzy
-finder, the command palette or the settings screen is up moves nothing. It is
-swallowed rather than dismissing the popup -- the scrollbar does not change the
-mode, and closing one from a scroll gesture would.
+The horizontal scroll total is `ui::scrollbar::content_width`: the widest line
+**currently on screen**, bounded by `SCAN_BUDGET` (50,000). There is
+deliberately no document-wide maximum-width cache -- it would have to be
+invalidated on every edit, undo, redo and LSP-applied change. The visible
+consequence is that the thumb resizes as the document scrolls vertically.
+
+The budget is spent **across the visible lines, not per line**, and it bounds
+characters examined as well as columns counted: the `RopeSlice` is walked
+lazily, a line is measured only as far as what is left of the budget, and once
+it is gone the remaining lines are not measured at all. A frame therefore costs
+one budget however tall the viewport is, and never O(line length) -- not even
+for a line built out of zero-width characters, which a column budget alone would
+not bound. `ui::editor_view::display_width_capped_chars` is the shared scan;
+it takes a character iterator rather than a `&str` precisely so no line has to
+be collected into a `String` first, which used to make the scan O(line length)
+whatever the cap said.
+
+What the total is a function of is the whole design: the document, `top_line`,
+`view.area_height` and the track width -- and **not** `left_col`. A horizontal
+drag writes `left_col` and nothing else, so it cannot move the scale it is being
+measured against. The press, every drag event and the frame drawn after the
+release all measure the same thing and get the same number: a held pointer
+settles on the _first_ event, and letting go does not shift the thumb.
+
+Getting there took removing two things that had grown around each other. The
+budget was once `left_col + k`, which grew the total with every scroll rightwards
+so the thumb never approached the end of the track -- the destination receded as
+fast as it was approached. The **floor** at `left_col + code_width` was then kept
+for a different reason (below) and reintroduced the same feedback, and
+`ScrollbarDrag::Horizontal` grew a latched `total` to break it. Latching worked
+and cost two defects of its own: the thumb jumped on release, where the latched
+number and the fresh one differed, and an `Up` lost outside the terminal left the
+latch behind for later frames to be drawn through -- a thumb for content that is
+not on screen. A constant budget and no floor leave nothing to latch.
+
+The floor existed to keep a thumb on screen when `left_col` is past every visible
+line -- a long line scrolled right along and then scrolled off the top. Without
+it `total` is just what fits, `thumb` returns `None`, and the bar is empty while
+the code area shows blank columns. What leads back is a **rule** rather than a
+number: `handle_hscrollbar_press` treats a press on an empty track as "return to
+column 0" instead of swallowing it. That is the one place the two bars differ,
+and it is the state only the horizontal one can be in -- `top_line` past the
+document is not reachable, `left_col` past the content is.
+
+The price of the budget is a horizon: a line wider than 50,000 columns cannot be
+dragged past that point, and the cursor motions (`End`, search) are what reach
+further. Carried out there by the cursor, `left_col` exceeds the total, and
+`thumb`'s `offset.min(max_offset)` pins the thumb to the right end of the track
+rather than overflowing it -- so it is still there to grab and drag back.
+
+`ui::scrollbar::hscroll_total(editor, code_width)` is the single source of the
+number, and both `render.rs` and `mouse.rs` go through it. Two matching call
+sites would be one drift away from a thumb drawn where the pointer is not. The
+viewport height inside it comes from `view.area_height` rather than from
+`AppLayout`, for the same one-source reason.
+
+The vertical press is tested **before** `editor_area` in `handle_left_click`
+because the column is inside that region's columns -- otherwise a press on the
+thumb would place the cursor on the last visible character of a line. The
+horizontal press is tested there too, for symmetry and against a future re-carve:
+the row does not overlap `editor_area`, so nothing presently depends on the
+order. A press off either thumb centres it under the pointer and the drag carries
+on under the same rule -- except on an empty horizontal track, where there is no
+thumb to centre and the press returns the view to column 0 instead. The grab
+point lives in `Editor.scrollbar_drag`, whose `ScrollbarDrag` carries the
+**axis** and nothing else, so only one drag can be live -- a pointer has one
+button and a drag has one axis, and two `Option`s would make an impossible state
+representable. It is cleared on every `Down`, so an `Up` lost outside the
+terminal cannot leave a thumb stuck to the pointer; nothing is drawn through it
+either way, since neither bar's total is read out of it. Nothing here moves the
+cursor, the selection or the mode, and no `MouseAction` variant is involved:
+scrolling is pure `Editor` state and `App` has nothing to decide.
+
+A popup owns both bars as it owns the wheel: `popup_is_up` guards press and drag
+alike, so a press on either scrollbar while the search bar, the fuzzy finder, the
+command palette or the settings screen is up moves nothing. It is swallowed
+rather than dismissing the popup -- a scrollbar does not change the mode, and
+closing one from a scroll gesture would.
 
 ### Confirm Dialog
 

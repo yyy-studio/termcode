@@ -42,17 +42,62 @@ fn blend_color(
     }
 }
 
-/// Display width of `line`, stopping once `cap` columns are reached.
-/// Bounded so minified lines far wider than the viewport are not fully scanned.
+/// Display width of `line`, stopping once `cap` columns are reached -- or `cap`
+/// characters have been examined, whichever comes first. Bounded so minified
+/// lines far wider than the viewport are not fully scanned; see
+/// [`display_width_capped_chars`] for why it takes both limits.
+///
+/// A `\t` counts as width 0 here, as it does in `char_index_to_display_col` and
+/// `str_display_width`, while this widget renders one to the next 4-column
+/// stop. That is pre-existing and already shapes `ensure_h_scroll`'s `left_col`,
+/// so the horizontal scrollbar sharing it is the *consistent* choice: a
+/// tab-indented line reports narrower than it draws, in the same direction as
+/// the scroll position it is compared against.
+///
+/// Private to this module: `ui::scrollbar::content_width` walks a `RopeSlice`
+/// and calls [`display_width_capped_chars`] directly, so this `&str` form has
+/// exactly one caller left, in the diagnostic underline below.
 fn display_width_capped(line: &str, cap: usize) -> usize {
+    display_width_capped_chars(line.chars(), cap).0
+}
+
+/// The same measurement over a bare character iterator, reporting how much of
+/// the budget it spent: `(width, chars_examined)`.
+///
+/// It takes an iterator rather than a `&str` so `ui::scrollbar::content_width`
+/// can walk a `RopeSlice` **lazily**. Collecting a line into a `String` first
+/// made the scan O(line length) whatever the cap said, since the allocation and
+/// the copy happened before the loop that stops -- 26.8 ms per call on a
+/// five-million-column line, once per visible line per frame.
+///
+/// `cap` bounds two things at once, and both are load-bearing:
+///
+/// - the **columns** counted, which is what the caller wants back, and
+/// - the **characters** examined, which is what the scan costs. A column budget
+///   alone bounds nothing on a line built out of zero-width characters (a tab
+///   here, every combining mark), because such a line advances the width by
+///   nothing however far it is walked.
+///
+/// The count is what lets a caller spread one budget across several lines, and
+/// what a test can observe: feed it a counting iterator and a line ten times
+/// longer must not cost ten times more.
+pub fn display_width_capped_chars(
+    mut chars: impl Iterator<Item = char>,
+    cap: usize,
+) -> (usize, usize) {
     let mut width = 0usize;
-    for ch in line.chars() {
-        if width >= cap {
-            break;
-        }
+    let mut scanned = 0usize;
+    // The limits are tested *before* the character is pulled, not after, so a
+    // scan that stops at the cap really touches `cap` characters and not one
+    // more. A `for` loop cannot do that: it has already advanced the iterator
+    // by the time the body runs, and the count a test observes would be off by
+    // one against the count the budget was decremented by.
+    while width < cap && scanned < cap {
+        let Some(ch) = chars.next() else { break };
         width += ch.width().unwrap_or(0);
+        scanned += 1;
     }
-    width.min(cap)
+    (width.min(cap), scanned)
 }
 
 impl<'a> EditorViewWidget<'a> {
@@ -305,6 +350,14 @@ impl Widget for EditorViewWidget<'_> {
                 let end_col = if diag.range.1.line == line_idx {
                     char_index_to_display_col(line_text, diag.range.1.column)
                 } else {
+                    // A diagnostic that runs past this line is underlined to
+                    // the line's end, capped at the last visible column so a
+                    // minified line is not walked to draw it. The cap bounds
+                    // characters as well as columns, so on a line whose first
+                    // `visible_end` characters carry no width -- a run of tabs
+                    // or combining marks -- this returns short and the underline
+                    // stops early or vanishes. Bounding the scan is worth more
+                    // than an exact underline on a line of that shape.
                     display_width_capped(line_text, visible_end)
                 };
                 for c in start_col.max(left_col)..end_col.min(visible_end) {
@@ -456,6 +509,74 @@ pub fn line_number_width_styled(line_count: usize, style: LineNumberStyle) -> u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The observable cost of a capped scan, not the width it returns.
+    ///
+    /// The width alone cannot see the regression this guards: collecting the
+    /// line into a `String` before the loop gave exactly the same answer while
+    /// walking and copying every character, 26.8 ms on a five-million-column
+    /// line against 3.1 µs. Counting what the iterator is asked for is what
+    /// makes the difference visible.
+    fn scan_cost(len: usize, ch: char, cap: usize) -> (usize, usize, usize) {
+        let mut pulled = 0usize;
+        let (width, scanned) = {
+            let chars = (0..len).map(|_| ch).inspect(|_| pulled += 1);
+            display_width_capped_chars(chars, cap)
+        };
+        (width, scanned, pulled)
+    }
+
+    #[test]
+    fn a_capped_scan_costs_the_cap_however_long_the_line_is() {
+        // Ten times the line, and a hundred times, must not be ten or a hundred
+        // times the work.
+        for len in [10_000usize, 100_000, 1_000_000] {
+            assert_eq!(
+                scan_cost(len, 'x', 100),
+                (100, 100, 100),
+                "len={len}: the scan must stop at the cap"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_shorter_than_the_cap_is_scanned_once_and_no_more() {
+        assert_eq!(scan_cost(30, 'x', 100), (30, 30, 30));
+        assert_eq!(scan_cost(0, 'x', 100), (0, 0, 0));
+        // A cap of zero measures nothing at all, which is what lets a caller
+        // stop asking once its budget is gone.
+        assert_eq!(scan_cost(1_000, 'x', 0), (0, 0, 0));
+    }
+
+    #[test]
+    fn zero_width_characters_cannot_outrun_the_cap() {
+        // The column budget alone bounds nothing here: a tab counts as zero
+        // columns (see the note on `display_width_capped`), so the width never
+        // reaches the cap however far the line is walked. The character limit
+        // is the half of the cap that stops it.
+        assert_eq!(scan_cost(1_000_000, '\t', 100), (0, 100, 100));
+    }
+
+    #[test]
+    fn a_wide_character_counts_its_columns_and_the_width_stays_capped() {
+        // Two columns per character, so the column limit bites first: 50
+        // characters fill a cap of 100.
+        assert_eq!(scan_cost(1_000, '한', 100), (100, 50, 50));
+        // And the returned width never exceeds the cap even when the last
+        // character straddles it.
+        assert_eq!(scan_cost(1_000, '한', 101), (101, 51, 51));
+    }
+
+    #[test]
+    fn the_str_form_and_the_iterator_form_agree() {
+        for (line, cap) in [("hello", 100usize), ("hello", 3), ("한글abc", 4), ("", 10)] {
+            assert_eq!(
+                display_width_capped(line, cap),
+                display_width_capped_chars(line.chars(), cap).0,
+                "line={line:?} cap={cap}"
+            );
+        }
+    }
 
     #[test]
     fn line_number_width_none_returns_zero() {
