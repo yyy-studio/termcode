@@ -367,6 +367,66 @@ impl App {
         Ok(())
     }
 
+    /// Push the terminal's current size into everything measured from it: the
+    /// active view's area, the sidebar viewport, and each overlay's page
+    /// height.
+    ///
+    /// `View::new` starts a view at `area_height = 0`, and this is the only
+    /// place that ever fills it in. A view that has never been sized measures
+    /// nothing: `hscroll_total` scans zero lines and the horizontal thumb is
+    /// missing, `cmd_page_up`/`cmd_page_down` page by nothing, `ensure_h_scroll`
+    /// has no code width to keep the cursor inside, and the mouse hit-tests
+    /// against `terminal_size`'s 80x24 placeholder. The vertical thumb is sized
+    /// from the layout rect and the line count instead, so it appears on the
+    /// first frame regardless -- which is what makes the gap visible rather
+    /// than merely wrong.
+    ///
+    /// So it is *called* twice -- once before the first frame and once per loop
+    /// iteration -- rather than moved: run only before the loop, nothing would
+    /// ever see a resize.
+    fn sync_viewport_metrics(&mut self, size: ratatui::layout::Size) {
+        self.terminal_size = (size.width, size.height);
+        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        let app_layout = layout::compute_layout(
+            area,
+            self.editor.file_explorer.visible,
+            self.editor.file_explorer.width,
+            self.editor.theme.ui.pane_focus_style,
+            self.editor.theme.ui.panel_borders,
+        );
+        if let Some(view) = self.editor.active_view_mut() {
+            view.area_height = app_layout.editor_area.height;
+            view.area_width = app_layout.editor_area.width;
+        }
+        if let Some(sidebar) = app_layout.sidebar {
+            self.editor.file_explorer.viewport_height = sidebar.height as usize;
+        }
+
+        // Must match max_height values in FuzzyFinderWidget / CommandPaletteWidget
+        const FUZZY_MAX_HEIGHT: u16 = 20;
+        const PALETTE_MAX_HEIGHT: u16 = 15;
+        const OVERLAY_CHROME: usize = 3; // top border + input + bottom border
+
+        let fuzzy_height = FUZZY_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
+        self.editor.fuzzy_finder.visible_height = fuzzy_height.saturating_sub(OVERLAY_CHROME);
+        let palette_height = PALETTE_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
+        self.editor.command_palette.visible_height = palette_height.saturating_sub(OVERLAY_CHROME);
+
+        // The settings popup floats over the whole frame, and
+        // `popup_area` is what decides how tall it is -- asking it
+        // rather than guessing keeps a page here the same as a page
+        // on screen. Its border and hint line are not rows to fill.
+        let settings_height =
+            crate::ui::settings::popup_area(app_layout.frame).map_or(0, |popup| popup.height);
+        self.editor.settings.visible_height =
+            (settings_height as usize).saturating_sub(crate::ui::settings::CHROME_ROWS);
+        if let Some(picker) = &mut self.editor.settings.picker {
+            let rows =
+                crate::ui::settings::picker_visible_rows(settings_height, picker.options.len());
+            picker.set_visible_height(rows);
+        }
+    }
+
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut terminal = setup_terminal(self.editor.config.mouse_enabled)?;
 
@@ -378,6 +438,12 @@ impl App {
         }
 
         let app_result = (|| -> anyhow::Result<()> {
+            // Before the *first* frame, not only before the later ones: a view
+            // still at `area_height = 0` draws no horizontal thumb, and the
+            // startup files are already open and the resting mode already
+            // settled, so everything this reads is final.
+            self.sync_viewport_metrics(terminal.size()?);
+
             terminal.draw(|frame| {
                 render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
             })?;
@@ -412,54 +478,7 @@ impl App {
                     break;
                 }
 
-                {
-                    let size = terminal.size()?;
-                    self.terminal_size = (size.width, size.height);
-                    let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-                    let app_layout = layout::compute_layout(
-                        area,
-                        self.editor.file_explorer.visible,
-                        self.editor.file_explorer.width,
-                        self.editor.theme.ui.pane_focus_style,
-                        self.editor.theme.ui.panel_borders,
-                    );
-                    if let Some(view) = self.editor.active_view_mut() {
-                        view.area_height = app_layout.editor_area.height;
-                        view.area_width = app_layout.editor_area.width;
-                    }
-                    if let Some(sidebar) = app_layout.sidebar {
-                        self.editor.file_explorer.viewport_height = sidebar.height as usize;
-                    }
-
-                    // Must match max_height values in FuzzyFinderWidget / CommandPaletteWidget
-                    const FUZZY_MAX_HEIGHT: u16 = 20;
-                    const PALETTE_MAX_HEIGHT: u16 = 15;
-                    const OVERLAY_CHROME: usize = 3; // top border + input + bottom border
-
-                    let fuzzy_height = FUZZY_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
-                    self.editor.fuzzy_finder.visible_height =
-                        fuzzy_height.saturating_sub(OVERLAY_CHROME);
-                    let palette_height =
-                        PALETTE_MAX_HEIGHT.min(app_layout.editor_area.height) as usize;
-                    self.editor.command_palette.visible_height =
-                        palette_height.saturating_sub(OVERLAY_CHROME);
-
-                    // The settings popup floats over the whole frame, and
-                    // `popup_area` is what decides how tall it is -- asking it
-                    // rather than guessing keeps a page here the same as a page
-                    // on screen. Its border and hint line are not rows to fill.
-                    let settings_height = crate::ui::settings::popup_area(app_layout.frame)
-                        .map_or(0, |popup| popup.height);
-                    self.editor.settings.visible_height =
-                        (settings_height as usize).saturating_sub(crate::ui::settings::CHROME_ROWS);
-                    if let Some(picker) = &mut self.editor.settings.picker {
-                        let rows = crate::ui::settings::picker_visible_rows(
-                            settings_height,
-                            picker.options.len(),
-                        );
-                        picker.set_visible_height(rows);
-                    }
-                }
+                self.sync_viewport_metrics(terminal.size()?);
 
                 self.editor.sync_tab_modified();
                 terminal.draw(|frame| {
@@ -2810,5 +2829,60 @@ mod tests {
 
         assert!(!app.input_mapper.has_pending());
         assert_eq!(text(&app), "abc\n");
+    }
+    /// The first frame is drawn from a view that has never been sized -- unless
+    /// something sizes it first.
+    ///
+    /// `View::new` starts at `area_height = 0` and `run()` used to draw once
+    /// before the sizing block ever ran, so the horizontal scrollbar scanned
+    /// zero lines for the widest one, concluded nothing overflowed and drew no
+    /// thumb. The vertical bar is sized from the layout rect and the line count
+    /// instead, so it was already there: the frame came up with one bar of the
+    /// two until the first tick, 50 ms later, corrected it.
+    #[test]
+    fn the_first_frame_carries_a_horizontal_thumb() {
+        let path = std::env::temp_dir().join("termcode-app-first-frame.txt");
+        std::fs::write(
+            &path,
+            format!("{}\n{}", "x".repeat(400), "short\n".repeat(29)),
+        )
+        .unwrap();
+        let _f = TestFile(path.clone());
+
+        let mut app = App::with_config(None, AppConfig::default());
+        app.open_file(&path).unwrap();
+        assert_eq!(
+            app.editor.active_view().unwrap().area_height,
+            0,
+            "the state the first draw starts from"
+        );
+
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        // What `run()` does, in the order it does it.
+        app.sync_viewport_metrics(terminal.size().unwrap());
+        terminal
+            .draw(|frame| render::render(frame, &app.editor, &app.image_cache, &app.input_mapper))
+            .unwrap();
+
+        let row = layout::compute_layout(
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+            app.editor.file_explorer.visible,
+            app.editor.file_explorer.width,
+            app.editor.theme.ui.pane_focus_style,
+            app.editor.theme.ui.panel_borders,
+        )
+        .editor_hscrollbar
+        .expect("a reserved row");
+
+        let buf = terminal.backend().buffer();
+        let thumb: Vec<u16> = (row.x..row.x + row.width)
+            .filter(|&x| buf[(x, row.y)].symbol() != " ")
+            .collect();
+        assert!(
+            !thumb.is_empty(),
+            "the first frame drew no horizontal thumb for a 400-column line"
+        );
     }
 }

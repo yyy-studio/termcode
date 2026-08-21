@@ -985,6 +985,11 @@ mod tests {
                 "{mode:?} let the press grab the thumb"
             );
 
+            // The drag that follows a *refused* press: `scrollbar_drag` is
+            // `None`, so this goes down `handle_drag`'s `None` arm and must not
+            // reach the text selection underneath either. The guard on the
+            // `Some` arms is a different case, and is pinned by
+            // `a_popup_that_opens_mid_drag_freezes_the_held_vertical_thumb`.
             handle_mouse(&mut editor, drag(track.x, track.y + 18), &layout);
             handle_mouse(&mut editor, release(track.x, track.y + 18), &layout);
 
@@ -992,6 +997,64 @@ mod tests {
                 editor.active_view().unwrap().scroll.top_line,
                 100,
                 "{mode:?} let the scrollbar through to the buffer"
+            );
+            // Swallowed, not dismissed: the scrollbar never changes the mode.
+            assert_eq!(editor.mode, mode);
+        }
+    }
+
+    /// A popup that comes up *mid-drag* -- the case `handle_drag`'s guard is
+    /// the only thing standing in the way of.
+    ///
+    /// The press has to land before the popup, or the press guard turns the
+    /// drag away and `scrollbar_drag` is never armed, leaving `handle_drag` to
+    /// take its `None` arm and the guard on its `Some` arms unexecuted. The way
+    /// this happens for real is the keyboard: the thumb is held with the mouse
+    /// and `Ctrl+P` opens the palette, and crossterm's key and mouse streams
+    /// are independent, so the next `Drag` arrives with the popup already up.
+    #[test]
+    fn a_popup_that_opens_mid_drag_freezes_the_held_vertical_thumb() {
+        let layout = layout_with_title();
+        let track = scrollbar_track();
+
+        // The same press and drag with nothing in the way, so the assertions
+        // below are about the guard rather than about a drag going nowhere.
+        let (mut editor, _p) = editor_with_a_scrolled_document("mid-drag-vertical-control");
+        handle_mouse(&mut editor, press(track.x, track.y + 15), &layout);
+        let armed = editor.active_view().unwrap().scroll.top_line;
+        handle_mouse(
+            &mut editor,
+            drag(track.x, track.y + track.height + 40),
+            &layout,
+        );
+        let moved = editor.active_view().unwrap().scroll.top_line;
+        assert_ne!(moved, armed, "the control drag moved nothing to guard");
+
+        for mode in [
+            EditorMode::Search,
+            EditorMode::FuzzyFinder,
+            EditorMode::CommandPalette,
+            EditorMode::Settings,
+        ] {
+            let (mut editor, _p) = editor_with_a_scrolled_document("mid-drag-vertical");
+            handle_mouse(&mut editor, press(track.x, track.y + 15), &layout);
+            assert!(
+                editor.scrollbar_drag.is_some(),
+                "the press armed no drag to interrupt"
+            );
+            let held = editor.active_view().unwrap().scroll.top_line;
+
+            editor.mode = mode;
+            handle_mouse(
+                &mut editor,
+                drag(track.x, track.y + track.height + 40),
+                &layout,
+            );
+
+            assert_eq!(
+                editor.active_view().unwrap().scroll.top_line,
+                held,
+                "{mode:?} let the held thumb go on dragging the buffer behind it"
             );
             // Swallowed, not dismissed: the scrollbar never changes the mode.
             assert_eq!(editor.mode, mode);
@@ -2064,6 +2127,8 @@ mod tests {
                 editor.scrollbar_drag, None,
                 "{mode:?} armed a drag behind the popup"
             );
+            // As above: the press was refused, so this exercises the `None`
+            // arm. The mid-drag case has its own test.
             handle_mouse(&mut editor, drag(track.x + 40, track.y), &layout);
 
             assert_eq!(
@@ -2072,6 +2137,53 @@ mod tests {
                 "{mode:?} let the press through to the buffer"
             );
             // Swallowed, not dismissed: the scrollbar never changes the mode.
+            assert_eq!(editor.mode, mode);
+        }
+    }
+
+    /// The horizontal half of `a_popup_that_opens_mid_drag_freezes_the_held_vertical_thumb`
+    /// -- the two arms of `handle_drag` carry the guard separately, so one of
+    /// them passing says nothing about the other.
+    #[test]
+    fn a_popup_that_opens_mid_drag_freezes_the_held_horizontal_thumb() {
+        let layout = layout_with_title();
+        let row = hscrollbar_row();
+
+        let (mut editor, _p) = editor_with_a_long_line("mid-drag-horizontal-control");
+        let track = htrack(&editor);
+        editor.switch_mode(EditorMode::Normal);
+        editor.active_view_mut().unwrap().scroll.left_col = 100;
+        handle_mouse(&mut editor, press(track.x + 10, track.y), &layout);
+        let armed = editor.active_view().unwrap().scroll.left_col;
+        handle_mouse(&mut editor, drag(row.x + row.width + 40, track.y), &layout);
+        let moved = editor.active_view().unwrap().scroll.left_col;
+        assert_ne!(moved, armed, "the control drag moved nothing to guard");
+
+        for mode in [
+            EditorMode::Search,
+            EditorMode::FuzzyFinder,
+            EditorMode::CommandPalette,
+            EditorMode::Settings,
+        ] {
+            let (mut editor, _p) = editor_with_a_long_line("mid-drag-horizontal");
+            editor.switch_mode(EditorMode::Normal);
+            editor.active_view_mut().unwrap().scroll.left_col = 100;
+
+            handle_mouse(&mut editor, press(track.x + 10, track.y), &layout);
+            assert!(
+                editor.scrollbar_drag.is_some(),
+                "the press armed no drag to interrupt"
+            );
+            let held = editor.active_view().unwrap().scroll.left_col;
+
+            editor.mode = mode;
+            handle_mouse(&mut editor, drag(row.x + row.width + 40, track.y), &layout);
+
+            assert_eq!(
+                editor.active_view().unwrap().scroll.left_col,
+                held,
+                "{mode:?} let the held thumb go on dragging the buffer behind it"
+            );
             assert_eq!(editor.mode, mode);
         }
     }
