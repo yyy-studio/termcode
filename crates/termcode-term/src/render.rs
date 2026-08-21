@@ -278,7 +278,16 @@ pub fn render(
 /// terminal's own cursor: the block the user sees is the REVERSED cell the
 /// widget paints. `None` means the cursor is outside the code area on either
 /// axis, and a popup with no anchor is not drawn at all.
-fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u16, u16)> {
+///
+/// `pub(crate)` because `None` now means two things which are the same thing:
+/// the widget draws no block here, *and* the popup that would have anchored to
+/// it is closed -- in `App::dismiss_popups_without_a_cursor`, before the frame,
+/// rather than left `visible` and undrawn. This function is where that question
+/// is answered for both.
+pub(crate) fn cursor_screen_position(
+    editor: &Editor,
+    app_layout: &AppLayout,
+) -> Option<(u16, u16)> {
     let view = editor.active_view()?;
     let doc = editor.active_document()?;
     let gutter_width = crate::ui::editor_view::line_number_width_styled(

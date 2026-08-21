@@ -367,6 +367,25 @@ impl App {
         Ok(())
     }
 
+    /// The layout of the frame as it stands: `terminal_size` shaped by the
+    /// sidebar and the theme, which is every input `compute_layout` has.
+    ///
+    /// One construction site rather than three. The metrics are measured from
+    /// this, the mouse hit-tests against this, and the popup anchor is tested
+    /// against this -- so all three are provably talking about the same frame.
+    /// Three separate calls listing the same four fields is one forgotten field
+    /// away from hit-testing a layout that was never drawn.
+    fn current_layout(&self) -> layout::AppLayout {
+        let (w, h) = self.terminal_size;
+        layout::compute_layout(
+            ratatui::layout::Rect::new(0, 0, w, h),
+            self.editor.file_explorer.visible,
+            self.editor.file_explorer.width,
+            self.editor.theme.ui.pane_focus_style,
+            self.editor.theme.ui.panel_borders,
+        )
+    }
+
     /// Push the terminal's current size into everything measured from it: the
     /// active view's area, the sidebar viewport, and each overlay's page
     /// height.
@@ -386,15 +405,27 @@ impl App {
     /// ever see a resize.
     fn sync_viewport_metrics(&mut self, size: ratatui::layout::Size) {
         self.terminal_size = (size.width, size.height);
-        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-        let app_layout = layout::compute_layout(
-            area,
-            self.editor.file_explorer.visible,
-            self.editor.file_explorer.width,
-            self.editor.theme.ui.pane_focus_style,
-            self.editor.theme.ui.panel_borders,
-        );
+        let app_layout = self.current_layout();
+        // Compare before assigning: this is the only place these two numbers
+        // are ever written, so it is the only place that can *see* the viewport
+        // change shape -- and every path that changes it (terminal resize,
+        // sidebar width, sidebar visibility, theme, a tab switch onto a view
+        // last sized under different geometry) comes through here without
+        // knowing this exists.
+        //
+        // They are a pure function of the terminal size, the sidebar and the
+        // theme, none of which a scrollbar drag touches, so in the steady state
+        // `resized` is false and nothing below runs. That is what leaves a
+        // horizontal drag's `left_col` its own: correcting on every frame would
+        // pull it back toward the cursor while the pointer held the thumb. If a
+        // future change makes `editor_area` depend on something a drag *does*
+        // write, this reasoning breaks and
+        // `a_frame_that_did_not_change_size_leaves_the_scroll_alone` is what
+        // fails.
+        let mut resized = false;
         if let Some(view) = self.editor.active_view_mut() {
+            resized = view.area_height != app_layout.editor_area.height
+                || view.area_width != app_layout.editor_area.width;
             view.area_height = app_layout.editor_area.height;
             view.area_width = app_layout.editor_area.width;
         }
@@ -425,6 +456,125 @@ impl App {
                 crate::ui::settings::picker_visible_rows(settings_height, picker.options.len());
             picker.set_visible_height(rows);
         }
+
+        if resized {
+            self.recorrect_scroll_after_resize();
+        }
+    }
+
+    /// The viewport changed shape, so the scroll that kept the cursor inside it
+    /// may no longer. Move the scroll -- never the cursor -- back.
+    ///
+    /// Here rather than at the call sites (`apply_config_value`'s sidebar and
+    /// theme arms, an `AppEvent::Resize` handler) because at every one of those
+    /// points `view.area_width` is still the *previous* frame's:
+    /// `sync_viewport_metrics` does not run until the top of the next
+    /// iteration, so an immediate correction computes `code_width` from the old
+    /// width and misses by the sidebar delta. Correcting after the metrics are
+    /// refreshed and before the draw also means the user never sees a frame
+    /// with the cursor missing -- not even the single frame a "correct it next
+    /// time round" scheme would cost.
+    ///
+    /// A live scrollbar drag is a statement about where to *look*, which has
+    /// nothing to do with where the cursor is, so the axis that drag writes is
+    /// left alone -- and only that axis, because a drag has exactly one.
+    /// Skipping both would consume the size change and never get it back: the
+    /// cursor would stay lost for the rest of the drag and after it. Waiting
+    /// instead, by remembering that a correction is owed, would be state with a
+    /// lifetime -- which is precisely what `ScrollbarDrag`'s deleted `total`
+    /// latch was, and what an `Up` lost outside the terminal strands.
+    fn recorrect_scroll_after_resize(&mut self) {
+        let drag = self.editor.scrollbar_drag;
+
+        if !matches!(
+            drag,
+            Some(termcode_view::editor::ScrollbarDrag::Vertical { .. })
+        ) {
+            let scroll_off = self.editor.config.scroll_off;
+            if let Some(view) = self.editor.active_view_mut() {
+                view.ensure_cursor_visible(scroll_off);
+            }
+        }
+
+        if !matches!(
+            drag,
+            Some(termcode_view::editor::ScrollbarDrag::Horizontal { .. })
+        ) {
+            crate::command::ensure_h_scroll(&mut self.editor);
+        }
+    }
+
+    /// A completion or hover popup whose anchor has gone is closed. `visible`
+    /// means visible.
+    ///
+    /// Both popups hang off the cell the cursor is drawn in, and
+    /// `cursor_screen_position` answers `None` when there is no such cell. The
+    /// render path's two call sites are `if let Some(..)`, so the popup simply
+    /// stopped being drawn while its flag stayed `true` -- and `Enter` then
+    /// accepted an item nobody could see.
+    ///
+    /// "The anchor is gone" is not a proxy for "the popup is invisible": it is
+    /// the same statement, and `render.rs`'s own tests already assert the
+    /// equivalence (`the_popup_anchor_sits_on_the_cell_the_widget_reverses`,
+    /// `..._at_every_top_line`, `a_cursor_scrolled_out_of_the_code_area_has_no_anchor`).
+    /// Every path that can hide the cursor is therefore covered without being
+    /// enumerated, including the ones that do not exist yet -- which is why this
+    /// is one rule here rather than a dismissal bolted onto each of the three
+    /// scroll gestures.
+    ///
+    /// Hover is treated exactly like completion, though it is the lower-risk
+    /// half (every key already clears it, and `Enter` does not act on it): a
+    /// second `visible` flag that does not mean visible is the trap being
+    /// closed, so leaving one behind would make the rule false the day it is
+    /// written.
+    ///
+    /// The early return keeps the common frame free: `cursor_screen_position`
+    /// collects the cursor's line into a `String`, and a frame with no popup up
+    /// must not pay for that.
+    fn dismiss_popups_without_a_cursor(&mut self) {
+        if !self.editor.completion.visible && !self.editor.hover.visible {
+            return;
+        }
+        if render::cursor_screen_position(&self.editor, &self.current_layout()).is_none() {
+            self.editor.completion.hide();
+            self.editor.hover.hide();
+        }
+    }
+
+    /// Everything that happens between the last event and the next frame, in
+    /// the one order it happens in.
+    ///
+    /// The order is the contract, not an accident of how it was written:
+    /// everything measured from the terminal's size is settled *before* the
+    /// frame that reads it, so no frame is ever drawn from last frame's
+    /// metrics. `run()` spelled this sequence out twice -- once for the first
+    /// frame and once at the tail of the loop -- and the two drifted apart by a
+    /// step; a step added to one and not the other is a bug that only the first
+    /// frame or only every other frame shows.
+    ///
+    /// Generic over the backend so a test can settle and draw a `TestBackend`
+    /// through this code rather than by copying its order into the test body.
+    fn settle_and_draw<B: ratatui::backend::Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+    ) -> std::io::Result<()> {
+        // The terminal's own answer, not an `AppEvent::Resize` payload: the
+        // event is coalesced with others and this is the size the draw below
+        // will actually use.
+        self.sync_viewport_metrics(terminal.size()?);
+        // After the correction, never before it. The correction gets first
+        // refusal, so a resize does *not* close a popup -- it brings the cursor
+        // back and the anchor with it -- and only a real scroll away from the
+        // cursor (wheel, scrollbar drag, scrollbar press) closes one, which is
+        // the case where there is nothing left on screen to point at. Swapping
+        // these two lines is a behaviour change, and
+        // `a_resize_does_not_close_a_completion_popup` catches it.
+        self.dismiss_popups_without_a_cursor();
+        self.editor.sync_tab_modified();
+        terminal.draw(|frame| {
+            render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
+        })?;
+        Ok(())
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
@@ -441,12 +591,10 @@ impl App {
             // Before the *first* frame, not only before the later ones: a view
             // still at `area_height = 0` draws no horizontal thumb, and the
             // startup files are already open and the resting mode already
-            // settled, so everything this reads is final.
-            self.sync_viewport_metrics(terminal.size()?);
-
-            terminal.draw(|frame| {
-                render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
-            })?;
+            // settled, so everything this reads is final. This is why
+            // `settle_and_draw` has to be reachable from outside the loop as
+            // well as from its tail.
+            self.settle_and_draw(&mut terminal)?;
 
             self.dispatch_plugin_hook(HookEvent::OnReady);
 
@@ -478,12 +626,7 @@ impl App {
                     break;
                 }
 
-                self.sync_viewport_metrics(terminal.size()?);
-
-                self.editor.sync_tab_modified();
-                terminal.draw(|frame| {
-                    render::render(frame, &self.editor, &self.image_cache, &self.input_mapper)
-                })?;
+                self.settle_and_draw(&mut terminal)?;
             }
 
             Ok(())
@@ -570,8 +713,17 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Mouse(mouse_event) => self.handle_mouse(mouse_event),
-            AppEvent::Resize(_, _) => {
-                // Re-render happens automatically
+            AppEvent::Resize(w, h) => {
+                // The *frame* needs nothing from this: `settle_and_draw` asks
+                // the terminal for its size at the end of every iteration, and
+                // that answer -- not this payload -- is the one the draw uses.
+                //
+                // What does need it is `handle_mouse`, which hit-tests against
+                // `terminal_size` and can run against a mouse event coalesced
+                // into the same batch as this resize, i.e. before any frame is
+                // drawn. Left unwritten, that click is tested against the size
+                // the terminal used to have.
+                self.terminal_size = (w, h);
             }
             AppEvent::Tick => self.expire_pending_chord(),
             AppEvent::Lsp(response) => self.handle_lsp_response(response),
@@ -591,15 +743,7 @@ impl App {
             self.editor.settings.cancel_capture();
             self.settings_capture.clear();
         }
-        let (w, h) = self.terminal_size;
-        let area = ratatui::layout::Rect::new(0, 0, w, h);
-        let app_layout = layout::compute_layout(
-            area,
-            self.editor.file_explorer.visible,
-            self.editor.file_explorer.width,
-            self.editor.theme.ui.pane_focus_style,
-            self.editor.theme.ui.panel_borders,
-        );
+        let app_layout = self.current_layout();
 
         match mouse::handle_mouse(&mut self.editor, event, &app_layout) {
             MouseAction::None => {}
@@ -719,7 +863,7 @@ impl App {
             return;
         }
 
-        self.editor.hover.visible = false;
+        self.editor.hover.hide();
 
         if self.editor.help_visible {
             // Any key closes help popup
@@ -738,7 +882,7 @@ impl App {
         }
 
         if self.editor.mode != EditorMode::Insert && self.editor.completion.visible {
-            self.editor.completion.visible = false;
+            self.editor.completion.hide();
         }
 
         match self.editor.mode {
@@ -813,13 +957,13 @@ impl App {
                 true
             }
             KeyCode::Esc => {
-                self.editor.completion.visible = false;
+                self.editor.completion.hide();
                 true
             }
             // Any other key is ordinary input: dismiss the popup and let the
             // keymap have it.
             _ => {
-                self.editor.completion.visible = false;
+                self.editor.completion.hide();
                 false
             }
         }
@@ -2248,7 +2392,7 @@ impl App {
             Some(item) => item.insert_text.clone(),
             None => return,
         };
-        self.editor.completion.visible = false;
+        self.editor.completion.hide();
 
         let trigger_pos = self.editor.completion.trigger_position;
         let doc = match self.editor.active_document() {
@@ -2860,21 +3004,18 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
-        // What `run()` does, in the order it does it.
-        app.sync_viewport_metrics(terminal.size().unwrap());
-        terminal
-            .draw(|frame| render::render(frame, &app.editor, &app.image_cache, &app.input_mapper))
-            .unwrap();
+        // `run()`'s own first frame, not a copy of its steps: the sequence
+        // (settle, then draw) is what this asserts, so drawing before settling
+        // fails here. What it still cannot reach is the fact that `run()` calls
+        // this *before* the loop rather than only inside it -- `run()` needs a
+        // TTY. That is the whole of the gap now, where it used to be the whole
+        // sequence (`docs/plans/tab-width-consistency.md` 577-586).
+        app.settle_and_draw(&mut terminal).unwrap();
 
-        let row = layout::compute_layout(
-            ratatui::layout::Rect::new(0, 0, 80, 24),
-            app.editor.file_explorer.visible,
-            app.editor.file_explorer.width,
-            app.editor.theme.ui.pane_focus_style,
-            app.editor.theme.ui.panel_borders,
-        )
-        .editor_hscrollbar
-        .expect("a reserved row");
+        let row = app
+            .current_layout()
+            .editor_hscrollbar
+            .expect("a reserved row");
 
         let buf = terminal.backend().buffer();
         let thumb: Vec<u16> = (row.x..row.x + row.width)
@@ -2884,5 +3025,450 @@ mod tests {
             !thumb.is_empty(),
             "the first frame drew no horizontal thumb for a 400-column line"
         );
+    }
+    // --- Settling the frame: the viewport changed size ---
+
+    type TestTerminal = ratatui::Terminal<ratatui::backend::TestBackend>;
+
+    /// A file wide enough and tall enough that the cursor can be off screen on
+    /// either axis, with the cursor put near the far corner of it.
+    fn app_with_a_distant_cursor(name: &str) -> (App, TestFile) {
+        let path = std::env::temp_dir().join(format!("termcode-settle-{name}.txt"));
+        let line = "x".repeat(400);
+        std::fs::write(&path, format!("{line}\n").repeat(60)).unwrap();
+
+        let mut app = App::with_config(None, AppConfig::default());
+        app.open_file(&path).unwrap();
+        put_the_cursor_far_away(&mut app);
+        (app, TestFile(path))
+    }
+
+    fn put_the_cursor_far_away(app: &mut App) {
+        let view = app.editor.active_view_mut().unwrap();
+        view.cursor.line = 55;
+        view.cursor.column = 350;
+    }
+
+    /// The cell the frame just drawn carries the cursor block in, read out of
+    /// the terminal's own buffer rather than recomputed: this is the block the
+    /// user either sees or does not.
+    fn drawn_cursor_block(
+        terminal: &TestTerminal,
+        area: ratatui::layout::Rect,
+    ) -> Option<(u16, u16)> {
+        let buf = terminal.backend().buffer();
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if buf[(x, y)]
+                    .style()
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::REVERSED)
+                {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
+    }
+
+    fn assert_the_cursor_is_on_screen(app: &App, terminal: &TestTerminal, when: &str) {
+        let app_layout = app.current_layout();
+        let drawn = drawn_cursor_block(terminal, app_layout.editor_area);
+        let anchor = render::cursor_screen_position(&app.editor, &app_layout);
+        assert!(drawn.is_some(), "no cursor block drawn {when}");
+        assert_eq!(
+            drawn, anchor,
+            "the anchor disagrees with the drawn block {when}"
+        );
+    }
+
+    fn resize_to(app: &mut App, terminal: &mut TestTerminal, w: u16, h: u16) {
+        terminal.backend_mut().resize(w, h);
+        app.update(AppEvent::Resize(w, h));
+        app.settle_and_draw(terminal).unwrap();
+    }
+
+    /// A terminal resize changes the size of `editor_area` and nothing used to
+    /// re-correct the scroll afterwards, so the cursor was left outside the
+    /// viewport -- with no block drawn -- until the next cursor movement.
+    ///
+    /// Both axes and both directions: shrinking strands the cursor past the new
+    /// edge, and growing leaves the view scrolled further than it needs to be.
+    #[test]
+    fn a_terminal_resize_brings_the_cursor_back_into_view() {
+        let (mut app, _f) = app_with_a_distant_cursor("resize");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert_the_cursor_is_on_screen(&app, &terminal, "on the first frame");
+
+        resize_to(&mut app, &mut terminal, 40, 12);
+        assert_the_cursor_is_on_screen(&app, &terminal, "after shrinking both axes");
+
+        resize_to(&mut app, &mut terminal, 120, 40);
+        assert_the_cursor_is_on_screen(&app, &terminal, "after growing both axes");
+
+        // One axis at a time, so a correction that only ever runs on the other
+        // one cannot pass by accident.
+        resize_to(&mut app, &mut terminal, 40, 40);
+        assert_the_cursor_is_on_screen(&app, &terminal, "after narrowing only");
+
+        resize_to(&mut app, &mut terminal, 40, 10);
+        assert_the_cursor_is_on_screen(&app, &terminal, "after shortening only");
+    }
+
+    /// The same defect through a second trigger, to show that one correction
+    /// point covers every path that resizes `editor_area` without any of them
+    /// knowing it exists. This is the easiest one for a user to reach: the
+    /// sidebar has a drag handle.
+    #[test]
+    fn widening_the_sidebar_brings_the_cursor_back_into_view() {
+        let (mut app, _f) = app_with_a_distant_cursor("sidebar");
+        app.editor.file_explorer.visible = true;
+        app.editor.file_explorer.width = 20;
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert_the_cursor_is_on_screen(&app, &terminal, "with a narrow sidebar");
+
+        app.editor.file_explorer.width = 60;
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert_the_cursor_is_on_screen(&app, &terminal, "after widening the sidebar");
+    }
+
+    /// The constraint the correction must not break, stated directly.
+    ///
+    /// `mouse.rs`'s drag invariants -- a horizontal drag writes `left_col` and
+    /// only `left_col`, a held pointer settles on the first event, letting go
+    /// does not shift the thumb -- never call `sync_viewport_metrics`, so a
+    /// correction that ran on every frame would leave all of them passing while
+    /// the running editor pulled the thumb back toward the cursor each frame.
+    /// This is the test that can see it.
+    #[test]
+    fn a_frame_that_did_not_change_size_leaves_the_scroll_alone() {
+        let (mut app, _f) = app_with_a_distant_cursor("steady");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        // Scrolled well away from the cursor, exactly as a wheel or a drag
+        // would leave it.
+        {
+            let view = app.editor.active_view_mut().unwrap();
+            view.scroll.left_col = 7;
+            view.scroll.top_line = 3;
+        }
+
+        for _ in 0..2 {
+            app.settle_and_draw(&mut terminal).unwrap();
+            let view = app.editor.active_view().unwrap();
+            assert_eq!(
+                view.scroll.left_col, 7,
+                "left_col was pulled back on a frame that changed nothing"
+            );
+            assert_eq!(
+                view.scroll.top_line, 3,
+                "top_line was pulled back on a frame that changed nothing"
+            );
+        }
+    }
+
+    /// A resize arriving mid-drag: the axis the pointer owns is left to it, and
+    /// the other one is still corrected. Skipping both would consume the size
+    /// change and never get it back.
+    #[test]
+    fn a_resize_during_a_horizontal_drag_leaves_left_col_to_the_drag() {
+        let (mut app, _f) = app_with_a_distant_cursor("hdrag");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        {
+            let view = app.editor.active_view_mut().unwrap();
+            view.scroll.left_col = 0;
+            view.scroll.top_line = 0;
+        }
+        app.editor.scrollbar_drag =
+            Some(termcode_view::editor::ScrollbarDrag::Horizontal { grab: 0 });
+
+        resize_to(&mut app, &mut terminal, 60, 20);
+
+        let view = app.editor.active_view().unwrap();
+        assert_eq!(
+            view.scroll.left_col, 0,
+            "the drag's own axis was corrected out from under it"
+        );
+        assert_ne!(
+            view.scroll.top_line, 0,
+            "the other axis was skipped as well"
+        );
+    }
+
+    #[test]
+    fn a_resize_during_a_vertical_drag_leaves_top_line_to_the_drag() {
+        let (mut app, _f) = app_with_a_distant_cursor("vdrag");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        {
+            let view = app.editor.active_view_mut().unwrap();
+            view.scroll.left_col = 0;
+            view.scroll.top_line = 0;
+        }
+        app.editor.scrollbar_drag =
+            Some(termcode_view::editor::ScrollbarDrag::Vertical { grab: 0 });
+
+        resize_to(&mut app, &mut terminal, 60, 20);
+
+        let view = app.editor.active_view().unwrap();
+        assert_eq!(
+            view.scroll.top_line, 0,
+            "the drag's own axis was corrected out from under it"
+        );
+        assert_ne!(
+            view.scroll.left_col, 0,
+            "the other axis was skipped as well"
+        );
+    }
+
+    /// The same defect reached through the tab manager rather than a setting: a
+    /// view last sized under a different geometry is stale the moment it
+    /// becomes active again, and `sync_viewport_metrics` is where that is seen.
+    #[test]
+    fn a_view_sized_under_a_different_layout_is_corrected_when_it_becomes_active() {
+        let (mut app, _f) = app_with_a_distant_cursor("tabs");
+
+        let second = std::env::temp_dir().join("termcode-settle-tabs-2.txt");
+        std::fs::write(&second, "short\n".repeat(4)).unwrap();
+        let _f2 = TestFile(second.clone());
+        app.open_file(&second).unwrap();
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        // Tab 2 is active, so only its view is resized here. Tab 1 keeps the
+        // area it was last sized with.
+        resize_to(&mut app, &mut terminal, 50, 14);
+
+        app.editor.tabs.set_active(0);
+        app.editor.sync_active_view_to_tab();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        assert_the_cursor_is_on_screen(
+            &app,
+            &terminal,
+            "after switching to a tab sized under the old layout",
+        );
+    }
+    // --- Settling the frame: a popup with no anchor ---
+
+    /// Short enough to survive the completion popup's width clamp, distinctive
+    /// enough that finding it in a frame buffer means something.
+    const POPUP_LABEL: &str = "zzcomplete";
+    const POPUP_INSERT: &str = "zzinserted";
+    const HOVER_TEXT: &str = "zzhovered";
+
+    /// A tall, wide document with a completion popup open at the top-left, the
+    /// state an LSP response leaves behind. There is no LSP in tests, so the
+    /// three fields the render path reads are set directly.
+    fn app_with_a_visible_completion(name: &str) -> (App, TestFile) {
+        let path = std::env::temp_dir().join(format!("termcode-popup-{name}.txt"));
+        let line = "x".repeat(400);
+        std::fs::write(&path, format!("{line}\n").repeat(60)).unwrap();
+
+        let mut app = App::with_config(None, AppConfig::default());
+        app.open_file(&path).unwrap();
+        app.editor.completion.items = vec![termcode_view::editor::CompletionItem {
+            label: POPUP_LABEL.to_string(),
+            detail: None,
+            insert_text: POPUP_INSERT.to_string(),
+        }];
+        app.editor.completion.selected = 0;
+        app.editor.completion.visible = true;
+        app.editor.completion.trigger_position = termcode_core::position::Position::new(0, 0);
+        (app, TestFile(path))
+    }
+
+    fn frame_contains(terminal: &TestTerminal, needle: &str) -> bool {
+        let buf = terminal.backend().buffer();
+        let area = *buf.area();
+        (area.y..area.y + area.height).any(|y| {
+            let row: String = (area.x..area.x + area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect();
+            row.contains(needle)
+        })
+    }
+
+    fn wheel_down(app: &mut App) {
+        app.update(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    /// The wheel scrolls the cursor off the top of the screen, and the popup
+    /// that pointed at it has nothing left to point at.
+    ///
+    /// Before this rule the popup simply stopped being *drawn* -- the render
+    /// path's `if let Some(anchor)` fell through -- while `visible` stayed
+    /// `true`, so the editor was in a state it could not show.
+    #[test]
+    fn the_wheel_closes_a_completion_popup_it_scrolled_away_from() {
+        let (mut app, _f) = app_with_a_visible_completion("wheel");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert!(app.editor.completion.visible);
+        assert!(
+            frame_contains(&terminal, POPUP_LABEL),
+            "the popup was not drawn to begin with, so this proves nothing"
+        );
+
+        wheel_down(&mut app);
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        assert!(
+            !app.editor.completion.visible,
+            "the popup stayed `visible` with its anchor gone"
+        );
+        assert!(
+            !frame_contains(&terminal, POPUP_LABEL),
+            "the popup is still on screen"
+        );
+    }
+
+    /// The defect as the user meets it: with the popup undrawn but still
+    /// `visible`, `Enter` was consumed by `handle_completion_popup_key` and
+    /// accepted an item nobody could see.
+    #[test]
+    fn enter_cannot_accept_a_completion_that_is_not_on_screen() {
+        let (mut app, _f) = app_with_a_visible_completion("enter");
+        app.editor.switch_mode(EditorMode::Insert);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        wheel_down(&mut app);
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        app.handle_key(code(KeyCode::Enter));
+
+        let text = text(&app);
+        assert!(
+            !text.contains(POPUP_INSERT),
+            "an item that was not on screen was accepted"
+        );
+        assert!(
+            text.starts_with('\n'),
+            "Enter did not fall through to ordinary Insert-mode input"
+        );
+    }
+
+    /// FR-VS-007, and the ordering guard for `settle_and_draw`: the correction
+    /// runs first, brings the cursor back and the anchor with it, so a resize
+    /// keeps the popup. Dismissing before correcting would close it here.
+    #[test]
+    fn a_resize_does_not_close_a_completion_popup() {
+        let (mut app, _f) = app_with_a_visible_completion("resize");
+        {
+            let view = app.editor.active_view_mut().unwrap();
+            view.cursor.line = 55;
+            view.cursor.column = 350;
+        }
+        app.editor.completion.trigger_position = termcode_core::position::Position::new(55, 350);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert!(frame_contains(&terminal, POPUP_LABEL));
+
+        resize_to(&mut app, &mut terminal, 50, 14);
+
+        assert!(
+            app.editor.completion.visible,
+            "a resize closed the popup instead of bringing its subject back"
+        );
+        assert!(
+            frame_contains(&terminal, POPUP_LABEL),
+            "the popup survived as a flag but not on screen"
+        );
+    }
+
+    /// A second gesture reaching the same state, through the scrollbar rather
+    /// than the wheel: the rule is about the anchor, not about the wheel.
+    #[test]
+    fn dragging_the_horizontal_thumb_closes_the_popup() {
+        let (mut app, _f) = app_with_a_visible_completion("hthumb");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert!(frame_contains(&terminal, POPUP_LABEL));
+
+        let row = app
+            .current_layout()
+            .editor_hscrollbar
+            .expect("a reserved row");
+        let press = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            // The track starts after the gutter, so the row's first column
+            // is not on it. The far end is, and it is where the drag goes.
+            column: row.x + row.width - 1,
+            row: row.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.update(AppEvent::Mouse(press));
+        let drag = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            column: row.x + row.width - 1,
+            row: row.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.update(AppEvent::Mouse(drag));
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        assert_ne!(
+            app.editor.active_view().unwrap().scroll.left_col,
+            0,
+            "the drag did not move the view, so this proves nothing"
+        );
+        assert!(
+            !app.editor.completion.visible,
+            "the popup outlived the column it pointed at"
+        );
+    }
+
+    /// The hover half, so dropping it from `dismiss_popups_without_a_cursor`
+    /// fails a test rather than passing quietly.
+    #[test]
+    fn a_hover_popup_closes_the_same_way() {
+        let (mut app, _f) = app_with_a_visible_completion("hover");
+        app.editor.completion.visible = false;
+        app.editor.hover.content = HOVER_TEXT.to_string();
+        app.editor.hover.visible = true;
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+        assert!(
+            frame_contains(&terminal, HOVER_TEXT),
+            "the hover popup was not drawn to begin with"
+        );
+
+        wheel_down(&mut app);
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        assert!(
+            !app.editor.hover.visible,
+            "the hover popup stayed `visible` with its anchor gone"
+        );
+        assert!(!frame_contains(&terminal, HOVER_TEXT));
     }
 }

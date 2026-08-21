@@ -37,7 +37,7 @@ Layer 4: termcode (binary in src/main.rs)        (deps: term)
 
 ### Core Patterns
 
-**TEA (The Elm Architecture):** All state changes flow through `Event -> Update -> Render`. The main loop in `App::run()` (app.rs) does: initial render, then loop { drain LSP events via `try_recv`, poll crossterm events, update state, render }. Widgets never mutate state during rendering.
+**TEA (The Elm Architecture):** All state changes flow through `Event -> Update -> Render`. The main loop in `App::run()` (app.rs) does: an initial `settle_and_draw`, then loop { drain LSP events via `try_recv`, poll crossterm events, update state, `settle_and_draw` }. `settle_and_draw` is the whole window between the last event and the next frame -- see `### Settling the Frame`. Widgets never mutate state during rendering.
 
 **Command Pattern:** Every user action is a named command (`CommandId = &'static str`) registered in `CommandRegistry`. Commands that need `App`-level access (e.g., `palette.open`, `goto.definition`, `lsp.hover`, `tab.close`, `app.quit`, `explorer.*`) are registered with a noop handler and intercepted in `App::dispatch_command()` / `App::handle_key()` before dispatch. All other commands receive `&mut Editor` only. Registration is mandatory even for app-level commands: `InputMapper` validates every binding against the registry and silently drops unknown ids. `register_hidden()` keeps a command bindable but out of the command palette (`explorer.*`, `fuzzy.up/down`, `palette.up/down`).
 
@@ -475,7 +475,9 @@ the click round trip idempotent. That holds at any `left_col` because both sides
 answer _nothing_ outside the viewport: the widget draws no block, and
 `cursor_screen_position` returns `None` rather than the nearest edge cell --
 it is the completion and hover popups' anchor, and an anchor clamped onto a cell
-the cursor is not in points the popup at a place the user sees no cursor.
+the cursor is not in points the popup at a place the user sees no cursor. What
+then happens to the popup that asked is in `### Settling the Frame`: no anchor
+means it is closed, not left `visible` and undrawn.
 Clicking inside a tab therefore moves the cursor to the tab's start -- visible
 behaviour, and the same answer already given for the second cell of a CJK
 character.
@@ -615,6 +617,75 @@ alike, so a press on either scrollbar while the search bar, the fuzzy finder, th
 command palette or the settings screen is up moves nothing. It is swallowed
 rather than dismissing the popup -- a scrollbar does not change the mode, and
 closing one from a scroll gesture would.
+
+### Settling the Frame
+
+`App::settle_and_draw` is everything that happens between the last event and the
+next frame, in one order: `sync_viewport_metrics`, then
+`dismiss_popups_without_a_cursor`, then `sync_tab_modified`, then the draw.
+`run()` calls it twice -- once before the loop, once at its tail -- because a
+view still at `area_height = 0` measures nothing on the first frame, and because
+running it only before the loop would mean nothing ever saw a resize. It is
+generic over the ratatui backend so a test can drive the real sequence with a
+`TestBackend` instead of copying its order into the test body.
+
+`sync_viewport_metrics` is the only writer of `view.area_width` /
+`view.area_height`, so it is the only place that can **see** the viewport change
+size. It compares before assigning, and on a change re-corrects the scroll --
+`ensure_cursor_visible` vertically, `command::ensure_h_scroll` horizontally --
+so the cursor is inside the viewport again before the frame is drawn. One
+correction point covers every path that can resize `editor_area`: a terminal
+resize, the sidebar's width and visibility, the theme's `pane_focus_style` /
+`panel_borders`, and a tab switch onto a view last sized under different
+geometry. None of them knows this exists, and a fifth path added tomorrow does
+not have to.
+
+Not at those call sites, because at every one of them `view.area_width` is still
+the *previous* frame's -- the metrics do not refresh until the top of the next
+iteration -- so an immediate correction computes `code_width` from the old width
+and misses by exactly the delta being applied. The exceptions are `tab_size` and
+`line_numbers` in `apply_config_value`, which **do** call `ensure_h_scroll`
+immediately: neither resizes `editor_area` (a gutter is carved out of it, not
+added to it), so change detection cannot see them, and `area_width` is already
+current there. Removing those calls "because the resize path covers it" puts the
+cursor back off the side of a tab-indented line.
+
+The correction runs **only** on a change, and that is a hard constraint rather
+than an optimisation. Correcting every frame would pull `left_col` back toward
+the cursor while a horizontal drag held the thumb, and `mouse.rs`'s drag
+invariants never call `sync_viewport_metrics`, so they would all keep passing
+while the running editor misbehaved.
+`a_frame_that_did_not_change_size_leaves_the_scroll_alone` is what states the
+constraint directly.
+
+A resize *can* arrive mid-drag, and then the axis the drag writes is skipped and
+the other one is not. `ScrollbarDrag` already names the axis, so this is a
+`matches!` and no new state. Skipping both axes would consume the size change
+and never get it back -- the cursor would stay lost for the rest of the drag and
+after it -- and remembering that a correction is owed would be a latch with a
+lifetime, which is exactly what `ScrollbarDrag`'s deleted `total` was.
+
+`dismiss_popups_without_a_cursor` closes a completion or hover popup whose
+anchor has gone: `visible` means visible. The two render call sites are
+`if let Some(anchor)`, so without this the popup stops being drawn while its
+flag stays `true`, and `Enter` accepts an item nobody can see. "No anchor" is
+not a proxy for "not drawn" -- `render.rs`'s tests already assert that
+`cursor_screen_position` answers `None` exactly when the widget reverses no
+cell -- so every path that can hide the cursor is covered without being
+enumerated. Both popups are treated alike, hover included: a second flag that
+does not mean visible is the trap being closed.
+
+The order of those two steps is the behaviour. The correction gets first
+refusal, so a **resize keeps** a popup -- the cursor comes back and the anchor
+with it -- and only a real scroll away from the cursor (wheel, scrollbar drag,
+scrollbar press) closes one. Reversing the two lines is a behaviour change that
+`a_resize_does_not_close_a_completion_popup` catches.
+
+None of this happens during render: `render` takes `&Editor` and must keep
+taking it (TEA). `AppEvent::Resize` is not where the frame is settled either --
+it only updates `App.terminal_size`, for the benefit of `handle_mouse`, which
+hit-tests against that field and can run against a click coalesced into the same
+batch. The size the draw uses is always `terminal.size()`.
 
 ### Confirm Dialog
 

@@ -90,12 +90,36 @@ pub struct CompletionState {
     pub trigger_position: Position,
 }
 
+impl CompletionState {
+    /// Take the popup off the screen.
+    ///
+    /// Hiding is **not** clearing: `accept_completion` sets this flag down and
+    /// *then* reads `items[selected]`, so the items have to survive the call. A
+    /// later completion response replaces them wholesale anyway, and a stale
+    /// list behind a hidden popup is never read.
+    ///
+    /// A method rather than a bare `visible = false` at each site so that "who
+    /// closes this popup" is one grep. That audit is what would have found the
+    /// defect where the popup stopped being *drawn* while this stayed `true`.
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
+}
+
 /// State for the hover information popup.
 #[derive(Debug, Default)]
 pub struct HoverState {
     pub visible: bool,
     pub content: String,
     pub position: Position,
+}
+
+impl HoverState {
+    /// Take the popup off the screen, keeping `content` for the same reason
+    /// `CompletionState::hide` keeps its items: the next response overwrites it.
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
 }
 
 /// Top-level editor state. Single source of truth.

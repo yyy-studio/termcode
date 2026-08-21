@@ -573,6 +573,14 @@ impl App {
             _ => 0,
         };
 
+        // `theme`, `ui.sidebar_visible` and `ui.sidebar_width` all change the
+        // *size* of `editor_area`, and none of them corrects the scroll here.
+        // That is deliberate: at this point `view.area_width` is still the
+        // previous frame's, so an `ensure_h_scroll` call would compute
+        // `code_width` from the old width and miss by exactly the delta being
+        // applied. `sync_viewport_metrics` sees the change on the next
+        // iteration, where the metrics are current, and corrects both axes
+        // before the frame is drawn. Do not add a call here.
         match keys {
             ["theme"] => self.apply_theme(&text),
             ["keymap", "preset"] => self.apply_keymap(&text),
@@ -601,6 +609,12 @@ impl App {
                 // correct for the old width -- is not for the new one. Without
                 // this the cursor's block simply vanishes off the side of a
                 // tab-indented line.
+                //
+                // The converse of the note above the match: this leaves
+                // `editor_area` exactly the same size, so change detection in
+                // `sync_viewport_metrics` cannot see it and will not correct
+                // it. `view.area_width` is already current here, which is what
+                // makes an immediate call both correct and necessary.
                 crate::command::ensure_h_scroll(&mut self.editor);
             }
             ["editor", "insert_spaces"] => self.editor.config.insert_spaces = flag,
@@ -612,6 +626,11 @@ impl App {
                     // The gutter grew or vanished, so the code area is a
                     // different width and the viewport it defines may no longer
                     // contain the cursor. Same correction, same single source.
+                    //
+                    // And, like `tab_size`, invisible to change detection: the
+                    // gutter is carved out of `editor_area`, it does not resize
+                    // it. Removing this because "the resize path covers it"
+                    // would leave the cursor off the side of the line.
                     crate::command::ensure_h_scroll(&mut self.editor);
                 }
             }
