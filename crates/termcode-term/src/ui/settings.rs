@@ -7,7 +7,7 @@ use termcode_theme::theme::Theme;
 use termcode_view::settings::{SettingsCategory, SettingsFocus, SettingsPicker, SettingsState};
 
 use super::overlay::render_overlay_frame;
-use crate::display_width::{char_display_width, str_display_width};
+use crate::display_width::{ui_char_width, ui_str_width};
 
 /// Rows the frame costs on top of the item list: the two borders and the hint
 /// line at the bottom. `App` subtracts the same amount when it tells the state
@@ -330,7 +330,7 @@ impl SettingsWidget<'_> {
 fn write_text(buf: &mut Buffer, x: u16, y: u16, end_x: u16, text: &str, style: Style) {
     let mut cursor = x;
     for ch in text.chars() {
-        let width = char_display_width(ch).max(1) as u16;
+        let width = ui_char_width(ch).max(1) as u16;
         if cursor + width > end_x {
             break;
         }
@@ -342,13 +342,13 @@ fn write_text(buf: &mut Buffer, x: u16, y: u16, end_x: u16, text: &str, style: S
 /// Cut `text` down to `width` display columns, so a long path or message
 /// cannot run past the pane it belongs to.
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if str_display_width(text) <= width {
+    if ui_str_width(text) <= width {
         return text.to_string();
     }
     let mut out = String::new();
     let mut used = 0;
     for ch in text.chars() {
-        let w = char_display_width(ch).max(1);
+        let w = ui_char_width(ch).max(1);
         if used + w > width.saturating_sub(1) {
             break;
         }

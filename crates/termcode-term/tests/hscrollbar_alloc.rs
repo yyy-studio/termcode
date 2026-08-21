@@ -22,6 +22,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use termcode_term::display_width::TabStops;
 use termcode_term::ui::scrollbar::{SCAN_BUDGET, content_width};
 use termcode_view::document::{Document, DocumentId};
 
@@ -76,8 +77,10 @@ fn measuring_the_scroll_total_does_not_allocate_the_line_it_measures() {
     let short = doc_with_one_line_of(small);
     let long = doc_with_one_line_of(large);
 
-    let (short_total, short_bytes) = bytes_allocated(|| content_width(&short, 0, 1, CODE_WIDTH));
-    let (long_total, long_bytes) = bytes_allocated(|| content_width(&long, 0, 1, CODE_WIDTH));
+    let (short_total, short_bytes) =
+        bytes_allocated(|| content_width(&short, 0, 1, CODE_WIDTH, TabStops::new(4)));
+    let (long_total, long_bytes) =
+        bytes_allocated(|| content_width(&long, 0, 1, CODE_WIDTH, TabStops::new(4)));
 
     // Both lines are past the budget, so both answer with it -- which is
     // exactly why the returned value cannot tell the two implementations

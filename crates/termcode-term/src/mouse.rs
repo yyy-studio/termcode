@@ -400,12 +400,15 @@ fn handle_editor_click(editor: &mut Editor, x: u16, y: u16, editor_area: &ratatu
     }
 
     let display_col = (x - code_start) as usize + left_col;
+    // A click anywhere inside a character's span names that character: the
+    // second cell of a CJK glyph, and every column of a tab's expansion.
+    let tabs = crate::display_width::TabStops::from_config(&editor.config);
     let target_col = editor
         .active_document()
         .map(|d| {
             let line_text: String = d.buffer.line(target_line).chars().collect();
             let line_text = line_text.trim_end_matches(&['\n', '\r'][..]);
-            crate::display_width::display_col_to_char_index(line_text, display_col)
+            tabs.char_at_col(line_text, display_col)
         })
         .unwrap_or(0);
 
@@ -523,7 +526,7 @@ pub fn tab_positions(tabs: &termcode_view::tab::TabManager) -> Vec<(usize, usize
         if i > 0 {
             x += 1; // separator '|'
         }
-        let label_width = crate::display_width::str_display_width(&tab.label);
+        let label_width = crate::display_width::ui_str_width(&tab.label);
         let label_len = if tab.modified {
             3 + label_width + 1
         } else {
@@ -656,13 +659,14 @@ fn handle_drag(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) {
     let target_line = (view_top + row_offset).min(line_count.saturating_sub(1));
     let display_col = (x - code_start) as usize + left_col;
 
+    let tabs = crate::display_width::TabStops::from_config(&editor.config);
     let target_col = editor
         .active_document()
         .map(|d| {
             if target_line < d.buffer.line_count() {
                 let line_text: String = d.buffer.line(target_line).chars().collect();
                 let line_text = line_text.trim_end_matches(&['\n', '\r'][..]);
-                crate::display_width::display_col_to_char_index(line_text, display_col)
+                tabs.char_at_col(line_text, display_col)
             } else {
                 0
             }
@@ -1362,6 +1366,169 @@ mod tests {
     /// The reserved column of `layout_with_title()`.
     fn scrollbar_track() -> Rect {
         layout_with_title().editor_scrollbar.expect("a scrollbar")
+    }
+
+    /// A line mixing every shape a column can take, for the click round trip:
+    /// a leading tab, consecutive tabs, a CJK character, a combining mark and a
+    /// trailing tab.
+    const TAB_LINE: &str = "\tab\t\t한글\te\u{0301}x\ty";
+
+    fn editor_with_a_tab_mixed_line(name: &str, tab_size: usize) -> (Editor, std::path::PathBuf) {
+        use termcode_core::config_types::EditorConfig;
+        use termcode_syntax::language::LanguageRegistry;
+        use termcode_theme::theme::Theme;
+
+        let dir = std::env::temp_dir().join("termcode-tab-click-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}-{tab_size}.txt"));
+        std::fs::write(&path, format!("{TAB_LINE}\n")).unwrap();
+
+        let config = EditorConfig {
+            tab_size,
+            ..EditorConfig::default()
+        };
+        let mut editor = Editor::new(Theme::default(), config, LanguageRegistry::new(), None);
+        editor.open_file(&path).unwrap();
+        size_view_from_layout(&mut editor, &layout_with_title());
+        (editor, path)
+    }
+
+    /// The code area's cells, one entry per column, as the widget draws them.
+    fn drawn_columns(editor: &Editor, layout: &AppLayout) -> Vec<String> {
+        use ratatui::widgets::Widget;
+        let area = layout.editor_area;
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let doc = editor.active_document().unwrap();
+        let view = editor.active_view().unwrap();
+        crate::ui::editor_view::EditorViewWidget::new(
+            doc,
+            view,
+            &editor.theme,
+            editor.mode,
+            None,
+            &editor.config,
+            true,
+        )
+        .render(area, &mut buf);
+        // Three gutter columns and a separator, then the code.
+        (area.x + 4..area.x + area.width)
+            .map(|x| buf[(x, area.y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_click_anywhere_in_a_characters_span_names_that_character() {
+        // FR-TAB-006. Every column of a tab's expansion resolves to the tab,
+        // the round trip `col -> char index -> col` lands on the start column
+        // of the character covering the click, and the character drawn at the
+        // clicked column is the one the click named.
+        let layout = layout_with_title();
+        let code_start = layout.editor_area.x + 4;
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_a_tab_mixed_line("round-trip", tab_size);
+            let tabs = crate::display_width::TabStops::from_config(&editor.config);
+            let cells = drawn_columns(&editor, &layout);
+            let total = tabs.col_at_char(TAB_LINE, TAB_LINE.chars().count());
+            assert!(
+                total <= cells.len(),
+                "the fixture line must fit the code area"
+            );
+
+            for (col, cell) in cells.iter().enumerate().take(total) {
+                handle_left_click(
+                    &mut editor,
+                    code_start + col as u16,
+                    layout.editor_area.y,
+                    &layout,
+                );
+                let index = editor.active_view().unwrap().cursor.column;
+                assert_eq!(
+                    index,
+                    tabs.char_at_col(TAB_LINE, col),
+                    "tab_size={tab_size} col={col}"
+                );
+
+                let ch = TAB_LINE.chars().nth(index).expect("a character");
+                let start = tabs.col_at_char(TAB_LINE, index);
+                assert!(
+                    start <= col && tabs.next_col(start, ch) > col,
+                    "tab_size={tab_size} col={col}: char {index} does not cover the clicked column"
+                );
+                // Clicking the character's own start column names it again, so
+                // clicking where the cursor already is leaves it alone.
+                handle_left_click(
+                    &mut editor,
+                    code_start + start as u16,
+                    layout.editor_area.y,
+                    &layout,
+                );
+                assert_eq!(
+                    editor.active_view().unwrap().cursor.column,
+                    index,
+                    "tab_size={tab_size} col={col}: the round trip moved the cursor"
+                );
+
+                // And the frame agrees: what is painted at the clicked column
+                // belongs to the character the click named.
+                if ch == '\t' {
+                    assert_eq!(cell, " ", "tab_size={tab_size} col={col}");
+                } else if col == start && tabs.next_col(start, ch) > start {
+                    assert_eq!(cell, &ch.to_string(), "tab_size={tab_size} col={col}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_click_inside_a_tab_moves_the_cursor_to_the_tabs_first_column() {
+        // Visible behaviour, and the contract rather than a glitch: a character
+        // occupying several columns is selected whole, the same answer already
+        // given for the second cell of a CJK glyph.
+        let layout = layout_with_title();
+        let code_start = layout.editor_area.x + 4;
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_a_tab_mixed_line("inside-a-tab", tab_size);
+            // The leading tab spans columns 0..tab_size; click its last one.
+            handle_left_click(
+                &mut editor,
+                code_start + (tab_size - 1) as u16,
+                layout.editor_area.y,
+                &layout,
+            );
+            let view = editor.active_view().unwrap();
+            assert_eq!(
+                view.cursor.column, 0,
+                "tab_size={tab_size}: the click landed off the tab"
+            );
+            let tabs = crate::display_width::TabStops::from_config(&editor.config);
+            assert_eq!(
+                tabs.col_at_char(TAB_LINE, view.cursor.column),
+                0,
+                "tab_size={tab_size}: the cursor is not at the tab's first column"
+            );
+        }
+    }
+
+    #[test]
+    fn a_click_past_the_end_of_a_line_lands_on_its_last_column() {
+        let layout = layout_with_title();
+        let code_start = layout.editor_area.x + 4;
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_a_tab_mixed_line("past-the-end", tab_size);
+            let tabs = crate::display_width::TabStops::from_config(&editor.config);
+            let total = tabs.col_at_char(TAB_LINE, TAB_LINE.chars().count());
+            handle_left_click(
+                &mut editor,
+                code_start + (total + 5) as u16,
+                layout.editor_area.y,
+                &layout,
+            );
+            assert_eq!(
+                editor.active_view().unwrap().cursor.column,
+                TAB_LINE.chars().count(),
+                "tab_size={tab_size}"
+            );
+        }
     }
 
     #[test]

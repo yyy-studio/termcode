@@ -2,9 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Widget;
-use unicode_width::UnicodeWidthStr;
 
-use crate::display_width::char_display_width;
+use crate::display_width::{ui_char_width, ui_str_width};
 use termcode_theme::theme::Theme;
 use termcode_view::confirm::ConfirmDialog;
 
@@ -58,12 +57,12 @@ pub fn layout(dialog: &ConfirmDialog, area: Rect) -> Option<DialogLayout> {
     let button_widths: Vec<usize> = dialog
         .buttons
         .iter()
-        .map(|b| b.width() + BUTTON_BRACKET_WIDTH)
+        .map(|b| ui_str_width(b) + BUTTON_BRACKET_WIDTH)
         .collect();
     let buttons_width: usize = button_widths.iter().sum::<usize>()
         + dialog.buttons.len().saturating_sub(1) * BUTTON_SPACING;
 
-    let content_width = dialog.message.width().max(buttons_width);
+    let content_width = ui_str_width(&dialog.message).max(buttons_width);
     let popup_width = (content_width as u16 + BORDER_AND_PADDING)
         .min(area.width.saturating_sub(BORDER_AND_PADDING));
 
@@ -169,11 +168,11 @@ impl Widget for ConfirmDialogWidget<'_> {
         let msg_y = popup_rect.y + 2;
         if msg_y < buf.area().height {
             let msg = &self.dialog.message;
-            let msg_display_width = msg.width();
+            let msg_display_width = ui_str_width(msg);
             let msg_offset = (inner_width.saturating_sub(msg_display_width)) / 2;
             let mut col = 0usize;
             for ch in msg.chars() {
-                let w = char_display_width(ch);
+                let w = ui_char_width(ch);
                 if col + w > inner_width {
                     break;
                 }
@@ -211,7 +210,7 @@ impl Widget for ConfirmDialogWidget<'_> {
                         if x < buf.area().width {
                             buf[(x, btn_y)].set_char(ch).set_style(style);
                         }
-                        col += char_display_width(ch);
+                        col += ui_char_width(ch);
                     }
                 }
             }

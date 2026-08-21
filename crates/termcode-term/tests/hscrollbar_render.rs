@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 
-use termcode_term::ui::editor_view::display_width_capped_chars;
+use termcode_term::display_width::TabStops;
 use termcode_term::ui::scrollbar::{
     self, HScrollbarWidget, SCAN_BUDGET, content_width, h_track, offset_for_thumb, thumb,
 };
@@ -61,7 +61,7 @@ fn render(total: usize, left_col: usize) -> Buffer {
 fn content_that_fits_draws_no_thumb_but_keeps_the_track() {
     let doc = doc_of_widths(&[10, 20, 5]);
     let code_width = track().width as usize;
-    let total = content_width(&doc, 0, 3, code_width);
+    let total = content_width(&doc, 0, 3, code_width, TabStops::new(4));
     let buf = render(total, 0);
 
     let area = track();
@@ -83,7 +83,7 @@ fn the_thumb_is_drawn_where_the_geometry_says() {
     let area = track();
     let doc = doc_of_widths(&[400]);
     let code_width = area.width as usize;
-    let total = content_width(&doc, 0, 1, code_width);
+    let total = content_width(&doc, 0, 1, code_width, TabStops::new(4));
     let buf = render(total, 40);
 
     let (offset, length) = thumb(area.width, total, 40).expect("a thumb");
@@ -135,7 +135,7 @@ fn an_inherited_left_col_leaves_the_track_empty_rather_than_inventing_a_thumb() 
     let doc = doc_of_widths(&[8, 12, 9]);
     let code_width = area.width as usize;
     let left_col = 500usize;
-    let total = content_width(&doc, 0, 3, code_width);
+    let total = content_width(&doc, 0, 3, code_width, TabStops::new(4));
 
     assert!(thumb_cols(&render(total, left_col), area).is_empty());
 }
@@ -150,7 +150,7 @@ fn a_left_col_past_what_the_bar_measures_pins_the_thumb_rather_than_overflowing(
     let area = track();
     let doc = doc_of_widths(&[SCAN_BUDGET * 4]);
     let code_width = area.width as usize;
-    let total = content_width(&doc, 0, 1, code_width);
+    let total = content_width(&doc, 0, 1, code_width, TabStops::new(4));
     assert_eq!(total, SCAN_BUDGET);
 
     let cols = thumb_cols(&render(total, 150_000), area);
@@ -230,8 +230,8 @@ fn the_thumb_resizes_as_the_widest_visible_line_changes() {
     let code_width = area.width as usize;
     let doc = doc_of_widths(&[400, 5, 5, 5]);
 
-    let wide = content_width(&doc, 0, 2, code_width);
-    let narrow = content_width(&doc, 2, 2, code_width);
+    let wide = content_width(&doc, 0, 2, code_width, TabStops::new(4));
+    let narrow = content_width(&doc, 2, 2, code_width, TabStops::new(4));
     assert!(wide > narrow);
 
     let wide_cols = thumb_cols(&render(wide, 0), area).len();
@@ -268,7 +268,7 @@ fn the_scan_costs_the_budget_and_not_the_length_of_the_line() {
         let mut pulled = 0usize;
         let (width, scanned) = {
             let chars = (0..len).map(|_| 'x').inspect(|_| pulled += 1);
-            display_width_capped_chars(chars, SCAN_BUDGET)
+            TabStops::new(4).width_capped_chars(chars, SCAN_BUDGET)
         };
         assert_eq!(
             (width, scanned, pulled),
@@ -277,16 +277,17 @@ fn the_scan_costs_the_budget_and_not_the_length_of_the_line() {
         );
     }
 
-    // And the half a column budget alone does not bound. A tab has no display
-    // width, so on a line built out of them the width never reaches the cap and
-    // only the *character* limit can stop the walk. The returned width is 0
-    // either way -- it is the count of characters pulled that tells the two
-    // implementations apart.
+    // And the half a column budget alone does not bound. A combining mark has
+    // no display width, so on a line built out of them the width never reaches
+    // the cap and only the *character* limit can stop the walk. The returned
+    // width is 0 either way -- it is the count of characters pulled that tells
+    // the two implementations apart. (A run of tabs was this example until tabs
+    // became column-accurate; it is now bounded by the column half of the cap.)
     for len in [SCAN_BUDGET * 2, SCAN_BUDGET * 20] {
         let mut pulled = 0usize;
         let (width, scanned) = {
-            let chars = (0..len).map(|_| '\t').inspect(|_| pulled += 1);
-            display_width_capped_chars(chars, SCAN_BUDGET)
+            let chars = (0..len).map(|_| '\u{0301}').inspect(|_| pulled += 1);
+            TabStops::new(4).width_capped_chars(chars, SCAN_BUDGET)
         };
         assert_eq!(
             (width, scanned, pulled),
@@ -307,7 +308,7 @@ fn a_minified_line_leaves_the_thumb_where_the_last_frame_drew_it() {
     let code_width = area.width as usize;
     let doc = doc_of_widths(&[SCAN_BUDGET * 4]);
 
-    let total = content_width(&doc, 0, 1, code_width);
+    let total = content_width(&doc, 0, 1, code_width, TabStops::new(4));
     assert_eq!(
         total, SCAN_BUDGET,
         "the budget, not the line, is what bounds a line this wide"
@@ -316,7 +317,7 @@ fn a_minified_line_leaves_the_thumb_where_the_last_frame_drew_it() {
     let (_, length) = thumb(area.width, total, 0).expect("a thumb");
     for offset in [0u16, 7, area.width / 2, area.width - length] {
         let left_col = offset_for_thumb(area.width, total, offset);
-        let redrawn = content_width(&doc, 0, 1, code_width);
+        let redrawn = content_width(&doc, 0, 1, code_width, TabStops::new(4));
         assert_eq!(redrawn, total, "the total moved between two frames");
         assert_eq!(
             thumb_cols(&render(redrawn, left_col), area),

@@ -13,7 +13,7 @@ use termcode_core::selection::Selection;
 use termcode_core::transaction::Transaction;
 use termcode_view::editor::{Editor, EditorMode};
 
-use crate::display_width::char_index_to_display_col;
+use crate::display_width::TabStops;
 use crate::ui::editor_view::line_number_width_styled;
 
 mod line_edit;
@@ -789,7 +789,13 @@ pub fn sync_cursor_from_selection(editor: &mut Editor) {
 }
 
 /// Adjust horizontal scroll so the cursor column is visible.
-fn ensure_h_scroll(editor: &mut Editor) {
+///
+/// `pub(crate)` for the settings screen: changing `tab_size` or `line_numbers`
+/// moves every display column on the cursor's line, and `left_col` was computed
+/// against the old ones. That path calls this rather than writing the
+/// arithmetic out again -- a second copy of "which column is the cursor drawn
+/// in" is the defect this whole area exists to remove.
+pub(crate) fn ensure_h_scroll(editor: &mut Editor) {
     let (cursor_display_col, code_width) = {
         let doc = match editor.active_document() {
             Some(d) => d,
@@ -805,7 +811,11 @@ fn ensure_h_scroll(editor: &mut Editor) {
         }
         let line_text: String = doc.buffer.line(line).into();
         let line_text_trimmed = line_text.trim_end_matches(&['\n', '\r'][..]);
-        let display_col = char_index_to_display_col(line_text_trimmed, view.cursor.column);
+        // The same stops the renderer paints with: correcting `left_col`
+        // against a column the widget does not draw the cursor at is what put
+        // `End` on a tab-indented line in the wrong place.
+        let display_col = TabStops::from_config(&editor.config)
+            .col_at_char(line_text_trimmed, view.cursor.column);
         let gutter_width =
             line_number_width_styled(doc.buffer.line_count(), editor.config.line_numbers);
         let code_w = (view.area_width).saturating_sub(gutter_width + 1) as usize;
@@ -1158,6 +1168,104 @@ fn clamp_cursor_column_right(editor: &mut Editor) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deeply tab-indented line: 13 tabs of indent and 40 characters of code,
+    /// the shape from the defect report.
+    const INDENTED: &str = "\t\t\t\t\t\t\t\t\t\t\t\t\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+    fn editor_with_the_indented_line(name: &str, tab_size: usize) -> (Editor, std::path::PathBuf) {
+        use termcode_core::config_types::EditorConfig;
+        use termcode_syntax::language::LanguageRegistry;
+        use termcode_theme::theme::Theme;
+
+        let dir = std::env::temp_dir().join("termcode-hscroll-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}-{tab_size}.txt"));
+        std::fs::write(&path, format!("{INDENTED}\n")).unwrap();
+
+        let config = EditorConfig {
+            tab_size,
+            ..EditorConfig::default()
+        };
+        let mut editor = Editor::new(Theme::default(), config, LanguageRegistry::new(), None);
+        editor.open_file(&path).unwrap();
+        let view = editor.active_view_mut().unwrap();
+        view.area_width = 59;
+        view.area_height = 20;
+        (editor, path)
+    }
+
+    #[test]
+    fn end_on_a_tab_indented_line_scrolls_to_where_the_cursor_is_drawn() {
+        // FR-TAB-007. `left_col` is corrected against the cursor's display
+        // column, so it has to be the column the *renderer* puts the cursor at.
+        // Before the fix the indent measured 0 columns, so `End` on this line
+        // left `left_col` 52 columns short at `tab_size = 4` and 104 short at 8
+        // -- the cursor was past the right edge of a viewport that thought it
+        // had arrived.
+        use ratatui::widgets::Widget;
+
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_the_indented_line("end-of-line", tab_size);
+            let tabs = crate::display_width::TabStops::from_config(&editor.config);
+            let last = INDENTED.chars().count();
+            editor.active_view_mut().unwrap().cursor.column = last;
+            ensure_h_scroll(&mut editor);
+
+            let code_width = 59usize - 4;
+            let view = editor.active_view().unwrap();
+            let display_col = tabs.col_at_char(INDENTED, last);
+            assert!(
+                (view.scroll.left_col..view.scroll.left_col + code_width).contains(&display_col),
+                "tab_size={tab_size}: cursor column {display_col} is outside \
+                 [{}, {})",
+                view.scroll.left_col,
+                view.scroll.left_col + code_width
+            );
+
+            // And the frame agrees: the reversed cell is inside the code area.
+            let area = ratatui::layout::Rect::new(20, 2, 59, 20);
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            let doc = editor.active_document().unwrap();
+            crate::ui::editor_view::EditorViewWidget::new(
+                doc,
+                view,
+                &editor.theme,
+                editor.mode,
+                None,
+                &editor.config,
+                true,
+            )
+            .render(area, &mut buf);
+
+            let reversed = (area.x..area.x + area.width)
+                .find(|x| {
+                    buf[(*x, area.y)]
+                        .style()
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::REVERSED)
+                })
+                .unwrap_or_else(|| panic!("tab_size={tab_size}: the cursor was not drawn at all"));
+            assert!(
+                reversed >= area.x + 4 && reversed < area.x + area.width,
+                "tab_size={tab_size}: the cursor was drawn at column {reversed}, outside the code area"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cursor_at_the_start_of_a_tab_indented_line_needs_no_scroll() {
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_the_indented_line("start-of-line", tab_size);
+            editor.active_view_mut().unwrap().cursor.column = 0;
+            ensure_h_scroll(&mut editor);
+            assert_eq!(
+                editor.active_view().unwrap().scroll.left_col,
+                0,
+                "tab_size={tab_size}"
+            );
+        }
+    }
 
     #[test]
     fn hidden_commands_are_excluded_from_the_palette() {

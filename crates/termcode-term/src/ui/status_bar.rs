@@ -132,7 +132,7 @@ impl Widget for StatusBarWidget<'_> {
         // characters and blank the cell a wide glyph covers -- ratatui's diff
         // skips that cell, so a character written into it never appears.
         for ch in left_text.chars() {
-            let w = crate::display_width::char_display_width(ch) as u16;
+            let w = crate::display_width::ui_char_width(ch) as u16;
             if w == 0 {
                 continue;
             }
@@ -185,7 +185,7 @@ impl Widget for StatusBarWidget<'_> {
             let hint = format!(" {} ", self.pending_keys);
             // A keymap may bind non-ASCII keys, so measure in columns rather
             // than bytes or the hint drifts out of place.
-            let hint_width = crate::display_width::str_display_width(&hint) as u16;
+            let hint_width = crate::display_width::ui_str_width(&hint) as u16;
             let hint_style = Style::default()
                 .fg(self.theme.ui.status_bar_bg.to_ratatui())
                 .bg(self.theme.ui.warning.to_ratatui());
@@ -196,7 +196,7 @@ impl Widget for StatusBarWidget<'_> {
                 if x >= x_offset && x < right_edge && x < area.x + area.width {
                     buf[(x, area.y)].set_char(ch).set_style(hint_style);
                 }
-                x += crate::display_width::char_display_width(ch) as u16;
+                x += crate::display_width::ui_char_width(ch) as u16;
             }
         }
     }

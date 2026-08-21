@@ -304,6 +304,14 @@ Changing a row does two things, in `App::apply_and_save_setting`:
 1. `apply_config_value` matches the row's dotted path and updates the running
    editor. Settings the editor only reads at startup (`editor.mouse_enabled`,
    anything under `plugins`) fall through it and are flagged `restart_required`.
+   `editor.tab_size` and `editor.line_numbers` then call
+   `command::ensure_h_scroll`: the first moves every display column on the
+   cursor's line, the second changes the gutter and so the width of the code
+   area, and a `left_col` computed against the old ones can leave the cursor off
+   the side of the screen. That call is the shared one, not a second copy of the
+   arithmetic -- and it belongs here rather than in `sync_viewport_metrics`,
+   which runs every frame and would drag `left_col` back to the cursor in the
+   middle of a scrollbar drag.
 2. `persist_config_value` writes it to the config file **that was actually
    loaded** -- `App.config_path`, which `App::new` points at the project-local
    `config/config.toml` when that is what it read.
@@ -420,6 +428,58 @@ clipboard. The path is joined with the working directory rather than
 canonicalised, so symlinks stay unresolved and Windows' verbatim `\\?\` prefix
 never appears.
 
+### Tab Width
+
+`display_width::TabStops` is the single source of what a `\t` is worth. A tab's
+width is a function of the **column it starts at** -- it advances to the next
+multiple of `tab_size` -- so there is deliberately no `fn width(ch)` for buffer
+text: a per-character width function cannot answer for a tab, and the answer the
+old one gave (0, from `UnicodeWidthChar::width`) is exactly what let the renderer
+draw a 4-column indent that every measurement path read as 0. `next_col(col, ch)`
+is the only place the arithmetic exists; `col_at_char`, `char_at_col`,
+`width_capped_chars` and the widget's own drawing loops are all folds over it, so
+a tab, a CJK glyph and a combining mark cannot disagree. A new mapping (a
+minimap, word wrap, a whitespace glyph) folds `next_col` too -- it does not write
+`(col / n + 1) * n` a second time.
+
+`tab_size` reaches the widget as `&EditorConfig` (`EditorViewWidget::new`'s 6th
+parameter, carrying `line_numbers` with it so the constructor stays at 7
+arguments) and everything else as `TabStops::from_config(&editor.config)`, built
+on the spot from the `&Editor` the caller already holds. There is **no `Default`
+impl**, on purpose: `TabStops::default()` would be a silent `tab_size` of 4, the
+constant this type removed. `TabStops::new` clamps to `1..=64`, both ends in the
+one place: a hand-edited `config.toml` can say `tab_size = 0` and this is the
+only code that divides by it, and it can equally say a number near `usize::MAX`,
+on which `(col / size + 1) * size` overflows.
+
+The tab-unaware side is the `ui_*` free functions (`ui_char_width`,
+`ui_str_width`, `ui_col_at_char`), for **UI strings** only -- a status bar
+segment, a tab label, a hover line, a settings row, a dialog button, a one-line
+query. None of those can contain a literal tab. The naming is the separation:
+`TabStops` is a type you must construct with a `tab_size`, `ui_*` plainly says
+what it is for, and a call site cannot pick the wrong half by accident.
+
+Tab stops are counted from **column 0 of the line**, never from `left_col`.
+Counting them from the scroll position would make scrolling horizontally move
+where the stops fall, which is why `ui::scrollbar::content_width` still does not
+depend on `left_col` even though it now takes a `TabStops`.
+
+`ui::editor_view::visible_span` is the one clipping rule the main render loop,
+the search highlight and the selection highlight share: a tab is clipped **per
+column**, so one straddling either edge of the viewport draws the columns that
+fit, while every other character is all-or-nothing -- half a CJK glyph is not a
+glyph. The cursor sits at its character's **first** column (a tab's first
+column, where the renderer starts painting it), which is what makes the widget's
+REVERSED cell and `render::cursor_screen_position` name the same cell and keeps
+the click round trip idempotent. That holds at any `left_col` because both sides
+answer _nothing_ outside the viewport: the widget draws no block, and
+`cursor_screen_position` returns `None` rather than the nearest edge cell --
+it is the completion and hover popups' anchor, and an anchor clamped onto a cell
+the cursor is not in points the popup at a place the user sees no cursor.
+Clicking inside a tab therefore moves the cursor to the tab's start -- visible
+behaviour, and the same answer already given for the second cell of a CJK
+character.
+
 ### Editor Scrollbars
 
 `AppLayout::editor_scrollbar` and `AppLayout::editor_hscrollbar` are the single
@@ -482,10 +542,17 @@ lazily, a line is measured only as far as what is left of the budget, and once
 it is gone the remaining lines are not measured at all. A frame therefore costs
 one budget however tall the viewport is, and never O(line length) -- not even
 for a line built out of zero-width characters, which a column budget alone would
-not bound. `ui::editor_view::display_width_capped_chars` is the shared scan;
-it takes a character iterator rather than a `&str` precisely so no line has to
-be collected into a `String` first, which used to make the scan O(line length)
+not bound. `display_width::TabStops::width_capped_chars` is the shared scan; it
+takes a character iterator rather than a `&str` precisely so no line has to be
+collected into a `String` first, which used to make the scan O(line length)
 whatever the cap said.
+
+The **character** half of the cap is justified by zero-width characters alone --
+combining marks. A run of tabs used to be the other example, back when a tab was
+measured as zero columns; it is no longer one, since a tab now advances the
+width to its next stop and so fills the column half after `SCAN_BUDGET /
+tab_size` characters. The character half stays: without it a line of combining
+marks is still walked to its end.
 
 What the total is a function of is the whole design: the document, `top_line`,
 `view.area_height` and the track width -- and **not** `left_col`. A horizontal

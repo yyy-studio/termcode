@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
+use crate::display_width::TabStops;
 use termcode_theme::theme::Theme;
 use termcode_view::document::Document;
 use termcode_view::editor::Editor;
@@ -205,11 +206,18 @@ pub const SCAN_BUDGET: usize = 50_000;
 ///
 /// `code_width == 0` returns 0: there is no track to draw in, so there is
 /// nothing worth measuring for.
+///
+/// `tab_stops` is passed in rather than defaulted: a tab's width is a function
+/// of the column it starts at, and this must report the width the *renderer*
+/// draws. The stops are counted from column 0 of each line, which is absolute
+/// and independent of `left_col` -- so taking them here does not reintroduce
+/// the scroll-position dependency the paragraph above removed.
 pub fn content_width(
     doc: &Document,
     top_line: usize,
     visible_lines: usize,
     code_width: usize,
+    tab_stops: TabStops,
 ) -> usize {
     if code_width == 0 {
         return 0;
@@ -225,12 +233,9 @@ pub fn content_width(
         if budget == 0 {
             break;
         }
-        let (width, scanned) = crate::ui::editor_view::display_width_capped_chars(
-            doc.buffer.line(line).chars(),
-            budget,
-        );
+        let (width, scanned) = tab_stops.width_capped_chars(doc.buffer.line(line).chars(), budget);
         widest = widest.max(width);
-        // Saturating, not `-=`. `display_width_capped_chars` is contracted to
+        // Saturating, not `-=`. `width_capped_chars` is contracted to
         // examine at most `cap` characters, so the subtraction cannot go
         // negative today -- but a wrap here is the *silent* failure of the two:
         // `budget` would land near `usize::MAX` and the next line would be
@@ -274,6 +279,7 @@ pub fn hscroll_total(editor: &Editor, code_width: usize) -> usize {
         view.scroll.top_line,
         view.area_height as usize,
         code_width,
+        TabStops::from_config(&editor.config),
     )
 }
 
@@ -396,11 +402,11 @@ mod tests {
         // Every line here is far inside `SCAN_BUDGET`, so what is being
         // measured is the *viewport*, not the bound.
         let doc = doc_of_widths(&[150, 10, 30, 12, 7, 140]);
-        assert_eq!(content_width(&doc, 1, 4, 20), 30);
+        assert_eq!(content_width(&doc, 1, 4, 20, TabStops::new(4)), 30);
         // Slide the viewport onto the wide first line and it takes over.
-        assert_eq!(content_width(&doc, 0, 4, 20), 150);
+        assert_eq!(content_width(&doc, 0, 4, 20, TabStops::new(4)), 150);
         // And onto the wide last line, likewise.
-        assert_eq!(content_width(&doc, 2, 4, 20), 140);
+        assert_eq!(content_width(&doc, 2, 4, 20, TabStops::new(4)), 140);
     }
 
     #[test]
@@ -409,7 +415,7 @@ mod tests {
         // A line four times the budget reports the budget, not its length --
         // and nothing here restates how the budget is derived, because it is
         // not derived from anything.
-        assert_eq!(content_width(&doc, 0, 1, 40), SCAN_BUDGET);
+        assert_eq!(content_width(&doc, 0, 1, 40, TabStops::new(4)), SCAN_BUDGET);
     }
 
     #[test]
@@ -450,7 +456,7 @@ mod tests {
                 // number, wherever the view was when the pointer took hold.
                 let mut seen = vec![left_col];
                 for _ in 0..8 {
-                    let total = content_width(doc, 0, visible, code_width);
+                    let total = content_width(doc, 0, visible, code_width, TabStops::new(4));
                     left_col = offset_for_thumb(track, total, held);
                     seen.push(left_col);
                 }
@@ -470,27 +476,30 @@ mod tests {
         // far as the ~10,000 that is left, and the third is never looked at.
         // The cost of a frame is therefore one budget, not one per row.
         let doc = doc_of_widths(&[40_000, 30_000, 45_000]);
-        assert_eq!(content_width(&doc, 0, 3, 40), 40_000);
+        assert_eq!(content_width(&doc, 0, 3, 40, TabStops::new(4)), 40_000);
 
         // Order is what decides which line the budget reaches, which is the
         // honest consequence of bounding the scan: put the widest first and it
         // is the one that is fully measured.
         let doc = doc_of_widths(&[45_000, 30_000, 40_000]);
-        assert_eq!(content_width(&doc, 0, 3, 40), 45_000);
+        assert_eq!(content_width(&doc, 0, 3, 40, TabStops::new(4)), 45_000);
 
         // Lines that comfortably fit the budget are all measured in full, so
         // ordinary documents are unaffected by any of this.
         let doc = doc_of_widths(&[10, 900, 40, 120]);
-        assert_eq!(content_width(&doc, 0, 4, 40), 900);
+        assert_eq!(content_width(&doc, 0, 4, 40, TabStops::new(4)), 900);
     }
 
     #[test]
     fn a_line_of_zero_width_characters_does_not_run_away_with_the_budget() {
-        // Tabs have no display width, so a column budget alone would never
-        // fill and the scan would walk the whole line. The character half of
-        // the budget is what stops it: the first line spends the entire budget
-        // on characters that add no width, so it contributes 0 columns and the
-        // second line is never reached.
+        // A combining mark has no display width, so a column budget alone would
+        // never fill and the scan would walk the whole line. The character half
+        // of the budget is what stops it: the first line spends the entire
+        // budget on characters that add no width, so it contributes 0 columns
+        // and the second line is never reached. (A run of tabs was this
+        // example until tabs became column-accurate -- see
+        // `a_line_of_tabs_is_bounded_by_the_column_half_of_the_budget` for what
+        // happens to that shape now.)
         //
         // That the 80-column line under it goes unmeasured is the honest cost
         // of a shared budget, not a defect: a line of this shape is pathological
@@ -505,13 +514,36 @@ mod tests {
         let mut doc = Document::new(DocumentId(0));
         doc.buffer.text_mut().insert(
             0,
-            &format!("{}\n{}\n", "\t".repeat(SCAN_BUDGET * 4), "x".repeat(80)),
+            &format!(
+                "{}\n{}\n",
+                "\u{0301}".repeat(SCAN_BUDGET * 4),
+                "x".repeat(80)
+            ),
         );
         assert_eq!(
-            content_width(&doc, 0, 2, 40),
+            content_width(&doc, 0, 2, 40, TabStops::new(4)),
             0,
             "the first line spent the whole budget and the second was not reached"
         );
+    }
+
+    #[test]
+    fn a_line_of_tabs_is_bounded_by_the_column_half_of_the_budget() {
+        // The other half of the pair above. A tab is measured as the columns it
+        // is drawn in, so a line of them fills the *column* budget after
+        // `SCAN_BUDGET / tab_size` characters -- a quarter of the walk, and the
+        // reported width is the budget rather than 0.
+        let mut doc = Document::new(DocumentId(0));
+        doc.buffer
+            .text_mut()
+            .insert(0, &format!("{}\n", "\t".repeat(SCAN_BUDGET)));
+        assert_eq!(content_width(&doc, 0, 1, 40, TabStops::new(4)), SCAN_BUDGET);
+        // And the stops the caller asks for are the stops that are measured.
+        let mut doc = Document::new(DocumentId(0));
+        doc.buffer.text_mut().insert(0, "\t\t\tx\n");
+        assert_eq!(content_width(&doc, 0, 1, 40, TabStops::new(4)), 13);
+        assert_eq!(content_width(&doc, 0, 1, 40, TabStops::new(8)), 25);
+        assert_eq!(content_width(&doc, 0, 1, 40, TabStops::new(2)), 7);
     }
 
     #[test]
@@ -527,7 +559,7 @@ mod tests {
         // empty track returns the view to column 0, tested there.
         let doc = doc_of_widths(&[8, 12, 9]);
         let code_width = 40usize;
-        let total = content_width(&doc, 0, 3, code_width);
+        let total = content_width(&doc, 0, 3, code_width, TabStops::new(4));
         assert_eq!(total, 12, "the widest visible line, nothing else");
         assert_eq!(thumb(code_width as u16, total, 500), None);
     }
@@ -535,23 +567,23 @@ mod tests {
     #[test]
     fn an_empty_document_and_an_empty_viewport_measure_nothing() {
         let empty = Document::new(DocumentId(0));
-        assert_eq!(content_width(&empty, 0, 30, 40), 0);
-        assert_eq!(content_width(&empty, 99, 30, 40), 0);
+        assert_eq!(content_width(&empty, 0, 30, 40, TabStops::new(4)), 0);
+        assert_eq!(content_width(&empty, 99, 30, 40, TabStops::new(4)), 0);
 
         let doc = doc_of_widths(&[100, 100]);
         // Zero visible lines: nothing to scan.
-        assert_eq!(content_width(&doc, 0, 0, 40), 0);
+        assert_eq!(content_width(&doc, 0, 0, 40, TabStops::new(4)), 0);
         // A viewport past the end of the document, likewise.
-        assert_eq!(content_width(&doc, 500, 30, 40), 0);
+        assert_eq!(content_width(&doc, 500, 30, 40, TabStops::new(4)), 0);
         // No track: nothing to draw in, and no scan worth running.
-        assert_eq!(content_width(&doc, 0, 30, 0), 0);
+        assert_eq!(content_width(&doc, 0, 30, 0, TabStops::new(4)), 0);
     }
 
     #[test]
     fn content_that_fits_the_code_area_has_no_horizontal_thumb() {
         let doc = doc_of_widths(&[10, 20, 5]);
         let code_width = 40usize;
-        let total = content_width(&doc, 0, 3, code_width);
+        let total = content_width(&doc, 0, 3, code_width, TabStops::new(4));
         assert_eq!(thumb(code_width as u16, total, 0), None);
     }
 
@@ -559,7 +591,7 @@ mod tests {
     fn the_horizontal_ends_are_exact() {
         let doc = doc_of_widths(&[400]);
         for code_width in [2usize, 10, 40, 57] {
-            let total = content_width(&doc, 0, 1, code_width);
+            let total = content_width(&doc, 0, 1, code_width, TabStops::new(4));
             let track = code_width as u16;
 
             let (offset, _) = thumb(track, total, 0).expect("a thumb");
@@ -584,7 +616,7 @@ mod tests {
         // terminal gets to a one-row editor: the thumb fills its whole track
         // and has nowhere to travel.
         let doc = doc_of_widths(&[400]);
-        let total = content_width(&doc, 0, 1, 1);
+        let total = content_width(&doc, 0, 1, 1, TabStops::new(4));
         assert_eq!(thumb(1, total, 0), Some((0, 1)));
         assert_eq!(thumb(1, total, total - 1), Some((0, 1)));
         assert_eq!(
@@ -599,7 +631,7 @@ mod tests {
         for code_width in [1u16, 2, 5, 20, 40, 57] {
             for widest in [code_width as usize + 1, 120, 999, 100_000] {
                 let doc = doc_of_widths(&[widest]);
-                let total = content_width(&doc, 0, 1, code_width as usize);
+                let total = content_width(&doc, 0, 1, code_width as usize, TabStops::new(4));
                 let (_, length) = thumb(code_width, total, 0).unwrap();
                 let travel = code_width - length;
                 for offset in 0..=travel {
