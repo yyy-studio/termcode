@@ -29,7 +29,7 @@ use crate::command::{
     CommandRegistry, insert_char, register_builtin_commands, rerun_search,
     sync_cursor_from_selection,
 };
-use crate::event::{AppEvent, EventHandler};
+use crate::event::{AppEvent, EventHandler, EventSource};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use termcode_plugin::{DeferredAction, HookEvent, PluginManager};
@@ -55,7 +55,10 @@ const MAX_COALESCED_EVENTS: usize = 256;
 
 pub struct App {
     editor: Editor,
-    event_handler: EventHandler,
+    /// Boxed so a test can put a scripted source in its place and drive
+    /// `event_loop` itself; the only implementation in production is
+    /// `EventHandler`.
+    event_handler: Box<dyn EventSource>,
     command_registry: CommandRegistry,
     input_mapper: InputMapper,
     should_quit: bool,
@@ -265,7 +268,7 @@ impl App {
         let mouse_enabled = editor.config.mouse_enabled;
         Self {
             editor,
-            event_handler: EventHandler::new(50),
+            event_handler: Box::new(EventHandler::new(50)),
             command_registry,
             input_mapper,
             should_quit: false,
@@ -620,50 +623,7 @@ impl App {
             self.editor.switch_to_default_mode();
         }
 
-        let app_result = (|| -> anyhow::Result<()> {
-            // Before the *first* frame, not only before the later ones: a view
-            // still at `area_height = 0` draws no horizontal thumb, and the
-            // startup files are already open and the resting mode already
-            // settled, so everything this reads is final. This is why
-            // `settle_and_draw` has to be reachable from outside the loop as
-            // well as from its tail.
-            self.settle_and_draw(&mut terminal)?;
-
-            self.dispatch_plugin_hook(HookEvent::OnReady);
-
-            loop {
-                while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
-                    self.update(lsp_event);
-                }
-
-                let event = self.event_handler.next()?;
-                self.process_and_settle(event);
-
-                // Then everything else the terminal already has waiting, before
-                // drawing anything. A wheel flick arrives as one burst -- the
-                // momentum tail included -- and rendering each event of it in
-                // turn puts every later keystroke behind a queue of frames
-                // nobody was going to see. Nothing is dropped here; only the
-                // frames between the events are. The cap keeps an unbroken
-                // stream of input from starving the draw entirely.
-                let mut coalesced = 0;
-                while !self.should_quit && coalesced < MAX_COALESCED_EVENTS {
-                    let Some(event) = self.event_handler.try_next()? else {
-                        break;
-                    };
-                    self.process_and_settle(event);
-                    coalesced += 1;
-                }
-
-                if self.should_quit {
-                    break;
-                }
-
-                self.settle_and_draw(&mut terminal)?;
-            }
-
-            Ok(())
-        })();
+        let app_result = self.event_loop(&mut terminal);
 
         if let Some(ref bridge) = self.lsp_bridge {
             bridge.shutdown();
@@ -680,6 +640,59 @@ impl App {
             (Ok(()), Err(restore_err)) => Err(restore_err),
             (Ok(()), Ok(())) => Ok(()),
         }
+    }
+
+    /// The first frame, then an event at a time until something quits.
+    ///
+    /// Generic over the backend and reading from `App.event_handler` rather
+    /// than from crossterm directly, so a test can drive **this** function --
+    /// the one production runs -- with a scripted source and a `TestBackend`.
+    /// A test that only reproduces the order here could not tell whether the
+    /// loop still performs it.
+    fn event_loop<B: ratatui::backend::Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+    ) -> anyhow::Result<()> {
+        // Before the *first* frame, not only before the later ones: a view
+        // still at `area_height = 0` draws no horizontal thumb, and the
+        // startup files are already open and the resting mode already
+        // settled, so everything this reads is final.
+        self.settle_and_draw(terminal)?;
+
+        self.dispatch_plugin_hook(HookEvent::OnReady);
+
+        loop {
+            while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
+                self.update(lsp_event);
+            }
+
+            let event = self.event_handler.next()?;
+            self.process_and_settle(event);
+
+            // Then everything else the terminal already has waiting, before
+            // drawing anything. A wheel flick arrives as one burst -- the
+            // momentum tail included -- and rendering each event of it in
+            // turn puts every later keystroke behind a queue of frames
+            // nobody was going to see. Nothing is dropped here; only the
+            // frames between the events are. The cap keeps an unbroken
+            // stream of input from starving the draw entirely.
+            let mut coalesced = 0;
+            while !self.should_quit && coalesced < MAX_COALESCED_EVENTS {
+                let Some(event) = self.event_handler.try_next()? else {
+                    break;
+                };
+                self.process_and_settle(event);
+                coalesced += 1;
+            }
+
+            if self.should_quit {
+                break;
+            }
+
+            self.settle_and_draw(terminal)?;
+        }
+
+        Ok(())
     }
 
     pub fn restore_session(&mut self) {
@@ -1458,6 +1471,7 @@ impl App {
             .editor
             .active_view()
             .map(|v| (v.cursor.line, v.cursor.column));
+        let prev_version = self.editor.active_document().map(|d| d.version);
 
         self.update(event);
 
@@ -1465,7 +1479,44 @@ impl App {
             return;
         }
 
+        self.invalidate_completion_that_moved_away(prev_cursor, prev_version);
         self.dispatch_state_diff_hooks(prev_mode, prev_active_tab, prev_cursor);
+    }
+
+    /// A completion belongs to the word it was asked about, and the cursor
+    /// leaving that word without typing is what ends it.
+    ///
+    /// `accept_completion` replaces the span from `trigger_position` to the
+    /// cursor. It refuses a different line, but a click further along the same
+    /// line left the trigger where it was and made that span cover text the
+    /// user never typed -- accepting then ate it. The popup is the request's
+    /// only visible part, so the request ends with it.
+    ///
+    /// "Without typing" is the whole rule, and the document's version is what
+    /// says so: typing a character moves the cursor *and* bumps the version,
+    /// while a click, an arrow key or a scroll-driven placement moves it alone.
+    /// Reading the version rather than naming the commands means a command
+    /// added later cannot forget to be listed here.
+    fn invalidate_completion_that_moved_away(
+        &mut self,
+        prev_cursor: Option<(usize, usize)>,
+        prev_version: Option<i32>,
+    ) {
+        if !self.editor.completion.visible {
+            return;
+        }
+        let cursor = self
+            .editor
+            .active_view()
+            .map(|v| (v.cursor.line, v.cursor.column));
+        if cursor == prev_cursor {
+            return;
+        }
+        let version = self.editor.active_document().map(|d| d.version);
+        if version != prev_version {
+            return;
+        }
+        self.editor.completion.hide();
     }
 
     fn dispatch_state_diff_hooks(
@@ -3059,6 +3110,57 @@ mod tests {
             "the first frame drew no horizontal thumb for a 400-column line"
         );
     }
+
+    /// Events read from a list instead of from the terminal, so `event_loop`
+    /// itself can be run in a test. `next` hands them out in order and then
+    /// ticks forever, which is what the real source does when nothing arrives.
+    struct ScriptedEvents(std::collections::VecDeque<AppEvent>);
+
+    impl crate::event::EventSource for ScriptedEvents {
+        fn next(&mut self) -> anyhow::Result<AppEvent> {
+            Ok(self.0.pop_front().unwrap_or(AppEvent::Tick))
+        }
+
+        fn try_next(&mut self) -> anyhow::Result<Option<AppEvent>> {
+            Ok(self.0.pop_front())
+        }
+    }
+
+    /// The gap the test above could not reach: that `run()`'s loop draws a
+    /// frame *before* waiting for the first event, not only after one.
+    ///
+    /// `event_loop` is the function `run()` calls, driven here with a scripted
+    /// source that quits immediately. Quitting breaks before the loop's own
+    /// draw, so the only frame that can exist is the one before the loop --
+    /// removing that call leaves the buffer blank and fails this.
+    #[test]
+    fn the_loop_draws_before_it_waits_for_an_event() {
+        let path = std::env::temp_dir().join("termcode-app-loop-first-frame.txt");
+        std::fs::write(&path, format!("{}\n", "x".repeat(400))).unwrap();
+        let _f = TestFile(path.clone());
+
+        let mut app = App::with_config(None, AppConfig::default());
+        app.open_file(&path).unwrap();
+        app.event_handler = Box::new(ScriptedEvents(std::collections::VecDeque::from(vec![
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        ])));
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.event_loop(&mut terminal).unwrap();
+        assert!(app.should_quit, "the scripted quit never took effect");
+
+        let buf = terminal.backend().buffer();
+        let area = *buf.area();
+        let painted = (area.y..area.y + area.height)
+            .any(|y| (area.x..area.x + area.width).any(|x| buf[(x, y)].symbol() != " "));
+        assert!(
+            painted,
+            "the loop quit without ever drawing, so nothing was on screen \
+             between startup and the first keystroke"
+        );
+    }
+
     // --- Settling the frame: the viewport changed size ---
 
     type TestTerminal = ratatui::Terminal<ratatui::backend::TestBackend>;
@@ -3344,6 +3446,76 @@ mod tests {
             row: 10,
             modifiers: KeyModifiers::NONE,
         }));
+    }
+
+    /// A click elsewhere on the same line ends the completion request.
+    ///
+    /// `accept_completion` replaces the span from `trigger_position` to the
+    /// cursor and refuses only a *different* line, so a click further along
+    /// this one left a span covering text the user never typed. The click is
+    /// not typing, so the request it was made for is over.
+    #[test]
+    fn a_click_along_the_line_ends_the_completion_it_was_not_asked_for() {
+        let (mut app, _f) = app_with_a_visible_completion("click-away");
+        app.editor.switch_mode(EditorMode::Insert);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        app.settle_and_draw(&mut terminal).unwrap();
+
+        let area = app.current_layout().editor_area;
+        app.process_and_settle(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: area.x + area.width / 2,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert!(
+            app.editor.active_view().unwrap().cursor.column > 0,
+            "the click did not move the cursor, so this proves nothing"
+        );
+        assert!(
+            !app.editor.completion.visible,
+            "the popup outlived the word it was asked about"
+        );
+
+        app.process_and_settle(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        let text: String = app.editor.active_document().unwrap().buffer.text().into();
+        assert!(
+            !text.contains(POPUP_INSERT),
+            "`Enter` accepted a completion whose trigger the click had stranded"
+        );
+    }
+
+    /// The rule is about *movement*, not about events: an event that moves
+    /// nothing leaves the popup alone.
+    ///
+    /// This is the guard against the rule being written too broadly. A popup
+    /// arrives asynchronously, from an LSP response the user did not ask for
+    /// at that moment, and the tick that follows must not take it away again.
+    /// (The keyboard needs no such guard: `handle_completion_popup_key` already
+    /// dismisses the popup on any key it does not consume, so a keystroke never
+    /// reaches this rule with the popup still up.)
+    #[test]
+    fn an_event_that_moves_nothing_leaves_the_completion_alone() {
+        let (mut app, _f) = app_with_a_visible_completion("tick-keeps");
+        app.editor.switch_mode(EditorMode::Insert);
+        let before = app.editor.active_view().unwrap().cursor.column;
+
+        app.process_and_settle(AppEvent::Tick);
+
+        assert_eq!(
+            app.editor.active_view().unwrap().cursor.column,
+            before,
+            "the tick moved the cursor, so this proves nothing"
+        );
+        assert!(
+            app.editor.completion.visible,
+            "a tick closed a popup nothing had moved away from"
+        );
     }
 
     /// The wheel and the `Enter` behind it, with no frame in between.

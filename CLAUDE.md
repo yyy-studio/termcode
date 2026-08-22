@@ -620,14 +620,25 @@ closing one from a scroll gesture would.
 
 ### Settling the Frame
 
-`App::settle_and_draw` is everything that happens between the last event and the
-next frame, in one order: `sync_viewport_metrics`, then
-`dismiss_popups_without_a_cursor`, then `sync_tab_modified`, then the draw.
-`run()` calls it twice -- once before the loop, once at its tail -- because a
-view still at `area_height = 0` measures nothing on the first frame, and because
-running it only before the loop would mean nothing ever saw a resize. It is
-generic over the ratatui backend so a test can drive the real sequence with a
-`TestBackend` instead of copying its order into the test body.
+`App::settle` is `sync_viewport_metrics` then `dismiss_popups_without_a_cursor`,
+and it runs after **every event** as well as before every frame
+(`settle_and_draw` is `settle`, then `sync_tab_modified`, then the draw).
+Per event, because both halves are read by the _next event_ rather than only by
+the draw: events arrive in batches -- the coalescing loop takes everything the
+terminal already has before drawing anything -- so the `Enter` behind a wheel
+notch used to accept a completion the notch had already stranded off screen, and
+a resize correction used to land on a scroll the user made after the resize.
+Settling is not drawing: it costs the batch no frames, and neither half does any
+work in the ordinary case.
+
+`event_loop` calls `settle_and_draw` before waiting for the first event as well
+as at the tail of each iteration: a view still at `area_height = 0` measures
+nothing, so the first frame would come up with one scrollbar of the two. It is
+generic over the ratatui backend, and events come from `App.event_handler`
+(a `Box<dyn EventSource>`), so a test drives the real loop with a scripted
+source and a `TestBackend` rather than copying its order into the test body --
+`the_loop_draws_before_it_waits_for_an_event` is what holds the pre-loop draw in
+place.
 
 `sync_viewport_metrics` is the only writer of `view.area_width` /
 `view.area_height`, so it is the only place that can **see** the viewport change
@@ -641,7 +652,7 @@ geometry. None of them knows this exists, and a fifth path added tomorrow does
 not have to.
 
 Not at those call sites, because at every one of them `view.area_width` is still
-the *previous* frame's -- the metrics do not refresh until the top of the next
+the _previous_ frame's -- the metrics do not refresh until the top of the next
 iteration -- so an immediate correction computes `code_width` from the old width
 and misses by exactly the delta being applied. The exceptions are `tab_size` and
 `line_numbers` in `apply_config_value`, which **do** call `ensure_h_scroll`
@@ -658,7 +669,7 @@ while the running editor misbehaved.
 `a_frame_that_did_not_change_size_leaves_the_scroll_alone` is what states the
 constraint directly.
 
-A resize *can* arrive mid-drag, and then the axis the drag writes is skipped and
+A resize _can_ arrive mid-drag, and then the axis the drag writes is skipped and
 the other one is not. `ScrollbarDrag` already names the axis, so this is a
 `matches!` and no new state. Skipping both axes would consume the size change
 and never get it back -- the cursor would stay lost for the rest of the drag and
@@ -674,6 +685,17 @@ not a proxy for "not drawn" -- `render.rs`'s tests already assert that
 cell -- so every path that can hide the cursor is covered without being
 enumerated. Both popups are treated alike, hover included: a second flag that
 does not mean visible is the trap being closed.
+
+A completion also ends when the cursor **leaves the word it was asked about**
+(`invalidate_completion_that_moved_away`, in `process_event`). `accept_completion`
+replaces the span from `trigger_position` to the cursor and refuses only a
+different line, so a click further along the same line left that span covering
+text the user never typed. The test is the document's version, not a list of
+commands: typing moves the cursor _and_ bumps the version, while a click or an
+arrow key moves it alone, so a command added later cannot forget to be listed.
+The keyboard needs none of this -- `handle_completion_popup_key` already
+dismisses the popup on any key it does not consume -- which is why the mouse was
+where this showed.
 
 The order of those two steps is the behaviour. The correction gets first
 refusal, so a **resize keeps** a popup -- the cursor comes back and the anchor
