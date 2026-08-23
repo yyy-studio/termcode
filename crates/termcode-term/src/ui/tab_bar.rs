@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
+use crate::display_width::ui_char_width;
 use termcode_theme::theme::Theme;
 use termcode_view::tab::TabManager;
 
@@ -68,7 +69,7 @@ impl Widget for TabBarWidget<'_> {
             };
 
             for ch in label.chars() {
-                let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+                let ch_width = ui_char_width(ch) as u16;
                 if x + ch_width > area.x + area.width {
                     break;
                 }

@@ -4,7 +4,7 @@ use ratatui::style::Style;
 
 use termcode_theme::theme::Theme;
 
-use crate::display_width::{char_display_width, char_index_to_display_col};
+use crate::display_width::{ui_char_width, ui_col_at_char};
 
 #[derive(Debug, Clone, Copy)]
 pub enum OverlayPosition {
@@ -191,7 +191,7 @@ pub fn render_input_line(
     // character index, and a CJK character is two columns wide, so counting
     // characters would leave the cursor sitting inside the text it follows.
     let available_width = (max_x.saturating_sub(x)) as usize;
-    let cursor_col = cursor_pos.map(|c| char_index_to_display_col(text, c));
+    let cursor_col = cursor_pos.map(|c| ui_col_at_char(text, c));
     // The first character drawn, and the column it starts at. A wide character
     // straddling the scroll point is skipped whole rather than drawn as half.
     let (text_offset, offset_col) = match cursor_col {
@@ -203,7 +203,7 @@ pub fn render_input_line(
                 if start >= skip {
                     break;
                 }
-                start += char_display_width(ch);
+                start += ui_char_width(ch);
                 idx += 1;
             }
             (idx, start)
@@ -220,7 +220,7 @@ pub fn render_input_line(
         if x >= max_x {
             break;
         }
-        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+        let ch_width = ui_char_width(ch) as u16;
         if x + ch_width > max_x {
             break;
         }
@@ -289,7 +289,7 @@ pub fn render_result_list(
         let max_x = area.x + area.width - 1;
 
         for (ci, ch) in item.text.chars().enumerate() {
-            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+            let ch_width = ui_char_width(ch) as u16;
             if x + ch_width > max_x {
                 break;
             }
@@ -310,7 +310,7 @@ pub fn render_result_list(
         if let Some(ref sec) = item.secondary {
             x += 1;
             for ch in sec.chars() {
-                let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+                let ch_width = ui_char_width(ch) as u16;
                 if x + ch_width > max_x {
                     break;
                 }

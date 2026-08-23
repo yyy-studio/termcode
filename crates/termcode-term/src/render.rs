@@ -23,6 +23,7 @@ use crate::ui::help_popup::HelpPopupWidget;
 use crate::ui::hover::HoverWidget;
 use crate::ui::image_view::{ImagePlaceholderWidget, ImageViewWidget};
 use crate::ui::pane_focus::{PaneAccentLineWidget, PaneBorderWidget, PaneTitleWidget};
+use crate::ui::scrollbar::{self, HScrollbarWidget, ScrollbarWidget};
 use crate::ui::search::SearchOverlayWidget;
 use crate::ui::settings::SettingsWidget;
 use crate::ui::status_bar::StatusBarWidget;
@@ -137,10 +138,66 @@ pub fn render(
             &editor.theme,
             editor.mode,
             search,
-            editor.config.line_numbers,
+            &editor.config,
             is_editor_active,
         );
         frame.render_widget(editor_widget, app_layout.editor_area);
+    }
+
+    // The column and the row are reserved whatever the tab holds, so the
+    // branches with no thumb to draw -- an image tab, or no view at all --
+    // still have to paint them. Not for staleness: ratatui resets the back
+    // buffer before every draw, so nothing from the last frame survives. It is
+    // that `Cell::reset` leaves `bg: Color::Reset`, which the backend emits as
+    // the *terminal's* default background -- an unpainted column would show as
+    // a vertical stripe beside the editor's own background.
+    if let Some(scrollbar_area) = app_layout.editor_scrollbar {
+        match (is_image_tab, editor.active_view(), editor.active_document()) {
+            (false, Some(view), Some(doc)) => {
+                let scrollbar = ScrollbarWidget::new(
+                    &editor.theme,
+                    doc.buffer.line_count(),
+                    view.scroll.top_line,
+                );
+                frame.render_widget(scrollbar, scrollbar_area);
+            }
+            _ => scrollbar::blank(&editor.theme, scrollbar_area, frame.buffer_mut()),
+        }
+    }
+
+    if let Some(row) = app_layout.editor_hscrollbar {
+        // The whole row first, so the gutter columns -- which have no track,
+        // because the gutter does not scroll -- get the editor's background
+        // whether or not there is a thumb to draw beside them.
+        scrollbar::blank(&editor.theme, row, frame.buffer_mut());
+
+        if let (false, Some(view), Some(doc)) =
+            (is_image_tab, editor.active_view(), editor.active_document())
+        {
+            let gutter_width = crate::ui::editor_view::line_number_width_styled(
+                doc.buffer.line_count(),
+                editor.config.line_numbers,
+            );
+            if let Some(track) = scrollbar::h_track(row, gutter_width) {
+                // `hscroll_total` and not `content_width` spelled out again:
+                // `mouse.rs` maps the pointer through the very same function,
+                // so the thumb drawn is the thumb being held. The number does
+                // not depend on `left_col`, which is the only thing a drag
+                // writes, so this frame agrees with the one before it and with
+                // the one after the button comes up.
+                let total = scrollbar::hscroll_total(editor, track.width as usize);
+                let hscrollbar = HScrollbarWidget::new(&editor.theme, total, view.scroll.left_col);
+                frame.render_widget(hscrollbar, track);
+            }
+        }
+    }
+
+    // The one cell where the row meets the column belongs to neither track --
+    // and for the same reason as above, it has to be painted rather than left
+    // alone, or it shows as a notch of the terminal's own background in the
+    // corner of the editor.
+    if let Some(corner) = app_layout.editor_scrollbar_corner() {
+        scrollbar::blank(&editor.theme, corner, frame.buffer_mut());
     }
 
     match editor.mode {
@@ -216,7 +273,21 @@ pub fn render(
     }
 }
 
-fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u16, u16)> {
+/// The cell the cursor is drawn in, which is what the completion and hover
+/// popups anchor themselves to. Despite the name it does **not** place the
+/// terminal's own cursor: the block the user sees is the REVERSED cell the
+/// widget paints. `None` means the cursor is outside the code area on either
+/// axis, and a popup with no anchor is not drawn at all.
+///
+/// `pub(crate)` because `None` now means two things which are the same thing:
+/// the widget draws no block here, *and* the popup that would have anchored to
+/// it is closed -- in `App::dismiss_popups_without_a_cursor`, before the frame,
+/// rather than left `visible` and undrawn. This function is where that question
+/// is answered for both.
+pub(crate) fn cursor_screen_position(
+    editor: &Editor,
+    app_layout: &AppLayout,
+) -> Option<(u16, u16)> {
     let view = editor.active_view()?;
     let doc = editor.active_document()?;
     let gutter_width = crate::ui::editor_view::line_number_width_styled(
@@ -226,22 +297,31 @@ fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u1
 
     let line_text: String = doc.buffer.line(view.cursor.line).chars().collect();
     let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
-    let display_col =
-        crate::display_width::char_index_to_display_col(line_text, view.cursor.column);
+    let display_col = crate::display_width::TabStops::from_config(&editor.config)
+        .col_at_char(line_text, view.cursor.column);
 
-    // Clamp to the code area: long (minified) lines can exceed u16 display columns.
+    // Out of the code area is *no* cell, not the nearest one. Clamping used to
+    // pin a scrolled-away cursor to the edge column, which the widget does not
+    // reverse -- the anchor named a cell the user sees nothing in. The bounds
+    // are the widget's own (`left_col..left_col + code_width`), so wherever
+    // this answers a cell, that is the cell the widget reversed, and where the
+    // widget draws no cursor this answers nothing. A `code_width` of 0 falls
+    // out of the same test.
     let code_width = app_layout
         .editor_area
         .width
-        .saturating_sub(gutter_width + 1);
-    if code_width == 0 {
+        .saturating_sub(gutter_width + 1) as usize;
+    let col_offset = display_col.checked_sub(view.scroll.left_col)?;
+    if col_offset >= code_width {
         return None;
     }
-    let col_offset = display_col
-        .saturating_sub(view.scroll.left_col)
-        .min(code_width as usize - 1) as u16;
+    let col_offset = col_offset as u16;
 
-    let row = view.cursor.line.saturating_sub(view.scroll.top_line);
+    // The same rule vertically, and for the same reason: a cursor line above
+    // `top_line` used to saturate to 0 and name the first visible row, which
+    // the widget does not reverse either. The wheel reaches this one without
+    // moving the cursor at all.
+    let row = view.cursor.line.checked_sub(view.scroll.top_line)?;
     if row >= app_layout.editor_area.height as usize {
         return None;
     }
@@ -249,4 +329,231 @@ fn cursor_screen_position(editor: &Editor, app_layout: &AppLayout) -> Option<(u1
     let cursor_x = app_layout.editor_area.x + gutter_width + 1 + col_offset;
     let cursor_y = app_layout.editor_area.y + row as u16;
     Some((cursor_x, cursor_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
+    use ratatui::widgets::Widget;
+
+    use termcode_core::config_types::EditorConfig;
+    use termcode_syntax::language::LanguageRegistry;
+    use termcode_theme::theme::Theme;
+
+    /// A line mixing every shape a column can take: a leading tab, consecutive
+    /// tabs, a CJK character, a combining mark and a trailing tab.
+    const LINE: &str = "\tab\t\t한글\te\u{0301}x\ty";
+
+    /// The frame the fixtures stand in for, built by `compute_layout` rather
+    /// than written out: a literal `AppLayout` that drifts from what production
+    /// computes tests a screen that never happens.
+    fn layout() -> AppLayout {
+        layout::compute_layout(
+            Rect::new(0, 0, 100, 24),
+            true,
+            20,
+            PaneFocusStyle::TitleBar,
+            false,
+        )
+    }
+
+    fn editor_with_the_line(name: &str, tab_size: usize) -> (Editor, std::path::PathBuf) {
+        editor_with_text(name, tab_size, LINE)
+    }
+
+    /// The same line, `count` times over, for the tests that scroll vertically.
+    fn editor_with_lines(
+        name: &str,
+        tab_size: usize,
+        count: usize,
+    ) -> (Editor, std::path::PathBuf) {
+        let text = vec![LINE; count].join("\n");
+        editor_with_text(name, tab_size, &text)
+    }
+
+    fn editor_with_text(name: &str, tab_size: usize, text: &str) -> (Editor, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join("termcode-cursor-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}-{tab_size}.txt"));
+        std::fs::write(&path, format!("{text}\n")).unwrap();
+
+        let config = EditorConfig {
+            tab_size,
+            ..EditorConfig::default()
+        };
+        let mut editor = Editor::new(Theme::default(), config, LanguageRegistry::new(), None);
+        editor.open_file(&path).unwrap();
+        let area = layout().editor_area;
+        let view = editor.active_view_mut().unwrap();
+        view.area_width = area.width;
+        view.area_height = area.height;
+        (editor, path)
+    }
+
+    /// The cell the *widget* reverses, which is the block the user sees.
+    fn reversed_cell(editor: &Editor, app_layout: &AppLayout) -> Option<(u16, u16)> {
+        let area = app_layout.editor_area;
+        let mut buf = Buffer::empty(area);
+        let doc = editor.active_document().unwrap();
+        let view = editor.active_view().unwrap();
+        crate::ui::editor_view::EditorViewWidget::new(
+            doc,
+            view,
+            &editor.theme,
+            editor.mode,
+            None,
+            &editor.config,
+            true,
+        )
+        .render(area, &mut buf);
+
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if buf[(x, y)]
+                    .style()
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+                {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn the_popup_anchor_sits_on_the_cell_the_widget_reverses() {
+        // FR-TAB-005. Two independent paths compute the cursor's column --
+        // `cursor_screen_position` for the popup anchor, the widget for the
+        // reversed block -- and a tab is where they used to disagree: the
+        // widget expanded it to four columns while the measurement counted
+        // zero.
+        //
+        // `left_col` is part of the claim, so it is part of the loop: at 0 the
+        // anchor's horizontal bounds are never tested, since no column of the
+        // line can fall to the left of the viewport.
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_the_line("cursor-agreement", tab_size);
+            let app_layout = layout();
+            for left_col in [0usize, 1, 4, 20, 200] {
+                editor.active_view_mut().unwrap().scroll.left_col = left_col;
+                for column in 0..LINE.chars().count() {
+                    editor.active_view_mut().unwrap().cursor.column = column;
+                    assert_eq!(
+                        cursor_screen_position(&editor, &app_layout),
+                        reversed_cell(&editor, &app_layout),
+                        "tab_size={tab_size} left_col={left_col} column={column}: the \
+                         popup anchor and the drawn block are in different cells"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_popup_anchor_sits_on_the_cell_the_widget_reverses_at_every_top_line() {
+        // The claim is about both axes, so the vertical one is looped too: a
+        // cursor line above `top_line` is the case the horizontal test cannot
+        // reach with a one-line fixture, and the one a wheel scroll produces
+        // without touching the cursor.
+        let app_layout = layout();
+        let rows = app_layout.editor_area.height as usize;
+        let (mut editor, _p) = editor_with_lines("cursor-agreement-rows", 4, rows * 3);
+
+        for cursor_line in [0usize, 1, rows, rows * 2] {
+            for top_line in [0usize, 1, rows - 1, rows, rows * 2] {
+                {
+                    let view = editor.active_view_mut().unwrap();
+                    view.cursor.line = cursor_line;
+                    view.cursor.column = 3;
+                    view.scroll.top_line = top_line;
+                }
+                assert_eq!(
+                    cursor_screen_position(&editor, &app_layout),
+                    reversed_cell(&editor, &app_layout),
+                    "cursor_line={cursor_line} top_line={top_line}: the popup anchor \
+                     and the drawn block are in different cells"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_cursor_scrolled_out_of_the_code_area_has_no_anchor() {
+        // The two directions the horizontal test above covers by construction,
+        // written out: a cursor to the left of `left_col` and one past the
+        // right edge. Both draw no block, so both must anchor nothing --
+        // pinning a popup to the edge column would point it at a cell the
+        // cursor is not in. Reached by dragging the horizontal scrollbar or
+        // turning the wheel sideways, neither of which moves the cursor.
+        let app_layout = layout();
+        // Long enough that a column of it can be past the right edge of the
+        // code area with the viewport still at the start of the line.
+        let long_line = "x".repeat(400);
+        let (mut editor, _p) = editor_with_text("cursor-off-screen", 4, &long_line);
+
+        // Off to the left: column 0, with the viewport scrolled past it.
+        {
+            let view = editor.active_view_mut().unwrap();
+            view.cursor.column = 0;
+            view.scroll.left_col = 20;
+        }
+        assert_eq!(
+            cursor_screen_position(&editor, &app_layout),
+            None,
+            "a cursor left of `left_col` anchors nothing"
+        );
+        assert_eq!(reversed_cell(&editor, &app_layout), None);
+
+        // Off to the right: the end of the line, with the viewport at column 0.
+        {
+            let view = editor.active_view_mut().unwrap();
+            view.cursor.column = long_line.chars().count() - 1;
+            view.scroll.left_col = 0;
+        }
+        assert_eq!(
+            cursor_screen_position(&editor, &app_layout),
+            None,
+            "a cursor past the right edge anchors nothing"
+        );
+        assert_eq!(reversed_cell(&editor, &app_layout), None);
+
+        // And the same cursor *is* anchored once the viewport reaches it, so
+        // the two assertions above are about the viewport and not about the
+        // fixture being unrenderable.
+        editor.active_view_mut().unwrap().scroll.left_col = 380;
+        assert!(
+            cursor_screen_position(&editor, &app_layout).is_some(),
+            "scrolled onto the cursor, the anchor comes back"
+        );
+        assert_eq!(
+            cursor_screen_position(&editor, &app_layout),
+            reversed_cell(&editor, &app_layout)
+        );
+    }
+
+    #[test]
+    fn the_cursor_on_a_tab_sits_at_the_tabs_first_column() {
+        // The deliberate half of FR-TAB-005: a tab occupies several columns and
+        // the cursor takes the one the renderer starts painting it at. The
+        // alternative (the last column) would put the terminal cursor in the
+        // *next* character's neighbourhood and make a click on the cursor move
+        // it.
+        for tab_size in [4usize, 8, 2] {
+            let (mut editor, _p) = editor_with_the_line("cursor-on-a-tab", tab_size);
+            let app_layout = layout();
+            // Character 0 is the leading tab, which starts at column 0.
+            editor.active_view_mut().unwrap().cursor.column = 0;
+            let (x, _) = cursor_screen_position(&editor, &app_layout).expect("a cursor");
+            assert_eq!(
+                x,
+                app_layout.editor_area.x + 3 + 1,
+                "tab_size={tab_size}: the cursor left the tab's first column"
+            );
+        }
+    }
 }

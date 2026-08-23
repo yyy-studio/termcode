@@ -169,7 +169,7 @@ syntax queries.
 | **Image viewer**        | View images in tabs -- PNG, JPG, GIF, BMP, WebP, ICO, TIFF, AVIF                             |
 | **Lua plugins**         | Custom commands, editor API, hook system                                                     |
 | **Undo/Redo**           | Branching history with full transaction support                                              |
-| **Mouse support**       | Click, drag select, scroll wheel, tabs, resizable sidebar, top bar and explorer buttons, dialog buttons |
+| **Mouse support**       | Click, drag select, scroll wheel, vertical and horizontal scrollbar drag, tabs, resizable sidebar, top bar and explorer buttons, dialog buttons |
 
 ### Under the Hood
 

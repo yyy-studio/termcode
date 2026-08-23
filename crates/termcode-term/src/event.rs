@@ -12,9 +12,34 @@ pub enum AppEvent {
     Lsp(LspResponse),
 }
 
+/// Where `App`'s loop gets its events.
+///
+/// A trait rather than the concrete handler because the loop is worth testing
+/// and crossterm's queue is not something a test can fill: `run()` reads the
+/// process's own terminal, so nothing that only *reproduces* the loop's order
+/// can prove the loop still performs it. A scripted source lets the real
+/// `event_loop` run against a `TestBackend`.
+pub trait EventSource {
+    /// Block until an event arrives, or until the tick rate expires.
+    fn next(&mut self) -> anyhow::Result<AppEvent>;
+
+    /// The next event if one is already waiting, without blocking.
+    fn try_next(&mut self) -> anyhow::Result<Option<AppEvent>>;
+}
+
 /// Event handler: polls crossterm events with a tick rate.
 pub struct EventHandler {
     tick_rate: Duration,
+}
+
+impl EventSource for EventHandler {
+    fn next(&mut self) -> anyhow::Result<AppEvent> {
+        EventHandler::next(self)
+    }
+
+    fn try_next(&mut self) -> anyhow::Result<Option<AppEvent>> {
+        EventHandler::try_next(self)
+    }
 }
 
 impl EventHandler {

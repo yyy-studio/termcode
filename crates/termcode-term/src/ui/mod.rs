@@ -10,6 +10,7 @@ pub mod hover;
 pub mod image_view;
 pub mod overlay;
 pub mod pane_focus;
+pub mod scrollbar;
 pub mod search;
 pub mod settings;
 pub mod status_bar;

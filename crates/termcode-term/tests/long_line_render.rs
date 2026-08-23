@@ -11,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 
-use termcode_core::config_types::LineNumberStyle;
+use termcode_core::config_types::EditorConfig;
 use termcode_core::position::Position;
 use termcode_core::selection::Selection;
 use termcode_term::ui::editor_view::EditorViewWidget;
@@ -68,17 +68,10 @@ fn view_at(cursor_col: usize, left_col: usize) -> View {
 
 fn render(doc: &Document, view: &View, search: Option<&SearchState>) -> Buffer {
     let theme = Theme::default();
+    let config = EditorConfig::default();
     let mut buf = Buffer::empty(AREA);
-    EditorViewWidget::new(
-        doc,
-        view,
-        &theme,
-        EditorMode::Normal,
-        search,
-        LineNumberStyle::Absolute,
-        true,
-    )
-    .render(AREA, &mut buf);
+    EditorViewWidget::new(doc, view, &theme, EditorMode::Normal, search, &config, true)
+        .render(AREA, &mut buf);
     buf
 }
 
@@ -130,6 +123,7 @@ fn renders_selection_scrolled_past_u16_columns() {
 
 fn render_search(doc: &Document, view: &View, search: &SearchState) -> Buffer {
     let theme = Theme::default();
+    let config = EditorConfig::default();
     let mut buf = Buffer::empty(AREA);
     EditorViewWidget::new(
         doc,
@@ -137,7 +131,7 @@ fn render_search(doc: &Document, view: &View, search: &SearchState) -> Buffer {
         &theme,
         EditorMode::Search,
         Some(search),
-        LineNumberStyle::Absolute,
+        &config,
         true,
     )
     .render(AREA, &mut buf);

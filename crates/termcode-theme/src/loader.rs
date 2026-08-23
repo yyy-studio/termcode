@@ -83,6 +83,7 @@ struct UiDef {
     pane_inactive_fg: Option<String>,
     pane_inactive_bg: Option<String>,
     panel_borders: Option<bool>,
+    scrollbar_thumb: Option<String>,
 }
 
 /// Load a theme from a TOML file.
@@ -150,6 +151,7 @@ pub fn parse_theme(toml_str: &str) -> Result<Theme, ThemeError> {
         pane_inactive_fg: resolve(&file.ui.pane_inactive_fg, defaults.pane_inactive_fg),
         pane_inactive_bg: resolve(&file.ui.pane_inactive_bg, defaults.pane_inactive_bg),
         panel_borders: file.ui.panel_borders.unwrap_or(false),
+        scrollbar_thumb: resolve(&file.ui.scrollbar_thumb, defaults.scrollbar_thumb),
     };
 
     // Resolve syntax scopes
@@ -259,6 +261,30 @@ pane_active_bg = "blue"
         assert_eq!(theme.ui.pane_active_bg, defaults.pane_active_bg);
         assert_eq!(theme.ui.pane_inactive_fg, defaults.pane_inactive_fg);
         assert_eq!(theme.ui.pane_inactive_bg, defaults.pane_inactive_bg);
+    }
+
+    #[test]
+    fn parse_explicit_scrollbar_thumb_resolves_through_palette() {
+        let toml = r##"
+[meta]
+name = "test"
+[palette]
+green = "#00ff00"
+[ui]
+scrollbar_thumb = "green"
+"##;
+        let theme = parse_theme(toml).expect("should parse");
+        assert_eq!(theme.ui.scrollbar_thumb, Color::Rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn parse_missing_scrollbar_thumb_uses_default() {
+        let toml = "[meta]\nname = \"test\"\n";
+        let theme = parse_theme(toml).expect("should parse");
+        assert_eq!(
+            theme.ui.scrollbar_thumb,
+            UiColors::default().scrollbar_thumb
+        );
     }
 
     #[test]

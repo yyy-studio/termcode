@@ -41,6 +41,7 @@ pub struct UiColors {
     pub pane_inactive_fg: Color,
     pub pane_inactive_bg: Color,
     pub panel_borders: bool,
+    pub scrollbar_thumb: Color,
 }
 
 impl Default for UiColors {
@@ -74,6 +75,7 @@ impl Default for UiColors {
             pane_inactive_fg: Color::Rgb(75, 82, 99),
             pane_inactive_bg: Color::Rgb(33, 37, 43),
             panel_borders: false,
+            scrollbar_thumb: Color::Rgb(75, 82, 99),
         }
     }
 }

@@ -573,6 +573,14 @@ impl App {
             _ => 0,
         };
 
+        // `theme`, `ui.sidebar_visible` and `ui.sidebar_width` all change the
+        // *size* of `editor_area`, and none of them corrects the scroll here.
+        // That is deliberate: at this point `view.area_width` is still the
+        // previous frame's, so an `ensure_h_scroll` call would compute
+        // `code_width` from the old width and miss by exactly the delta being
+        // applied. `sync_viewport_metrics` sees the change on the next
+        // iteration, where the metrics are current, and corrects both axes
+        // before the frame is drawn. Do not add a call here.
         match keys {
             ["theme"] => self.apply_theme(&text),
             ["keymap", "preset"] => self.apply_keymap(&text),
@@ -594,13 +602,36 @@ impl App {
                     log::warn!("File tree refresh after a settings change failed: {e}");
                 }
             }
-            ["editor", "tab_size"] => self.editor.config.tab_size = number.max(1) as usize,
+            ["editor", "tab_size"] => {
+                self.editor.config.tab_size = number.max(1) as usize;
+                // A tab is worth a different number of columns now, so every
+                // display column on the cursor's line moved and `left_col` --
+                // correct for the old width -- is not for the new one. Without
+                // this the cursor's block simply vanishes off the side of a
+                // tab-indented line.
+                //
+                // The converse of the note above the match: this leaves
+                // `editor_area` exactly the same size, so change detection in
+                // `sync_viewport_metrics` cannot see it and will not correct
+                // it. `view.area_width` is already current here, which is what
+                // makes an immediate call both correct and necessary.
+                crate::command::ensure_h_scroll(&mut self.editor);
+            }
             ["editor", "insert_spaces"] => self.editor.config.insert_spaces = flag,
             ["editor", "scroll_off"] => self.editor.config.scroll_off = number.max(0) as usize,
             ["editor", "line_numbers"] => {
                 if let Some((_, style)) = LINE_NUMBER_STYLES.iter().find(|(name, _)| *name == text)
                 {
                     self.editor.config.line_numbers = *style;
+                    // The gutter grew or vanished, so the code area is a
+                    // different width and the viewport it defines may no longer
+                    // contain the cursor. Same correction, same single source.
+                    //
+                    // And, like `tab_size`, invisible to change detection: the
+                    // gutter is carved out of `editor_area`, it does not resize
+                    // it. Removing this because "the resize path covers it"
+                    // would leave the cursor off the side of the line.
+                    crate::command::ensure_h_scroll(&mut self.editor);
                 }
             }
             // `editor.mouse_enabled` and everything under `plugins` are read
@@ -724,6 +755,130 @@ mod tests {
         assert_eq!(app.editor.config.tab_size, 5, "must apply to the editor");
         let written = std::fs::read_to_string(&config_path).unwrap();
         assert!(written.contains("tab_size = 5"), "{written}");
+    }
+
+    /// The line from the tab-width defect report -- 13 tabs of indent and 40
+    /// characters of code -- with the cursor at its end and the view scrolled
+    /// to hold it, in a 60-column viewport.
+    fn app_with_the_reported_line(
+        name: &str,
+        extra_lines: usize,
+        line_numbers: LineNumberStyle,
+    ) -> App {
+        let (mut app, _path) = app_with_settings(name);
+        let dir = std::env::temp_dir().join("termcode-settings-tests");
+        let file = dir.join(format!("{name}-line.txt"));
+        // `extra_lines` only widens the gutter: a file of 10,000 lines numbers
+        // them in five columns rather than three.
+        let text = format!(
+            "{}{}\n{}",
+            "\t".repeat(13),
+            "x".repeat(40),
+            "\n".repeat(extra_lines)
+        );
+        std::fs::write(&file, text).unwrap();
+        app.editor.open_file(&file).unwrap();
+        // Set before the scroll is corrected, not after: the correction has to
+        // be the one this gutter width asks for.
+        app.editor.config.line_numbers = line_numbers;
+        {
+            let view = app.editor.active_view_mut().unwrap();
+            view.area_width = 60;
+            view.area_height = 10;
+            view.cursor.column = 53; // 13 tabs + 40 characters: the end of the line
+        }
+        // The path `End` takes: move the cursor, then correct the scroll.
+        crate::command::sync_selection_from_cursor(&mut app.editor);
+        app.open_settings();
+        app
+    }
+
+    /// Whether the cursor's column falls inside the viewport being drawn,
+    /// measured the way the widget measures it.
+    fn cursor_is_on_screen(app: &App) -> bool {
+        let doc = app.editor.active_document().unwrap();
+        let view = app.editor.active_view().unwrap();
+        let line: String = doc.buffer.line(view.cursor.line).into();
+        let col = crate::display_width::TabStops::from_config(&app.editor.config)
+            .col_at_char(line.trim_end_matches(&['\n', '\r'][..]), view.cursor.column);
+        let gutter = crate::ui::editor_view::line_number_width_styled(
+            doc.buffer.line_count(),
+            app.editor.config.line_numbers,
+        );
+        let code_width = view.area_width.saturating_sub(gutter + 1) as usize;
+        col >= view.scroll.left_col && col < view.scroll.left_col + code_width
+    }
+
+    #[test]
+    fn a_wider_tab_size_re_scrolls_the_cursor_back_into_view() {
+        // Every display column on a tab-indented line moves when `tab_size`
+        // does, so a `left_col` that was correct for the old width leaves the
+        // cursor -- and its block -- off the side of the screen.
+        let mut app = app_with_the_reported_line("tab-size-rescroll", 0, LineNumberStyle::Absolute);
+        assert!(
+            cursor_is_on_screen(&app),
+            "the fixture must start with the cursor visible"
+        );
+        let before = app.editor.active_view().unwrap().scroll.left_col;
+
+        app.editor.settings.category_index = 1; // Editor
+        app.reload_settings_items();
+        select(&mut app, "Tab Size");
+        app.run_settings_command("settings.activate");
+        for _ in 0..12 {
+            app.run_settings_command("settings.down");
+        }
+        app.run_settings_command("settings.activate");
+
+        assert_eq!(app.editor.config.tab_size, 16, "the list landed on 16");
+        assert_ne!(
+            app.editor.active_view().unwrap().scroll.left_col,
+            before,
+            "a four-fold wider indent cannot leave the scroll where it was"
+        );
+        assert!(
+            cursor_is_on_screen(&app),
+            "left_col = {}: the cursor is off screen after the tab size changed",
+            app.editor.active_view().unwrap().scroll.left_col
+        );
+    }
+
+    #[test]
+    fn turning_the_line_numbers_on_re_scrolls_the_cursor_back_into_view() {
+        // The other half of the same defect: the gutter appearing narrows the
+        // code area, so the viewport `left_col` describes no longer reaches the
+        // cursor's column.
+        // 10,000 lines, so the gutter that appears is five columns wide plus
+        // its separator -- more than the margin `ensure_cursor_visible_h`
+        // keeps, which is what puts the cursor off screen rather than merely
+        // against the edge.
+        let mut app =
+            app_with_the_reported_line("line-numbers-rescroll", 10_000, LineNumberStyle::None);
+        assert!(cursor_is_on_screen(&app));
+        let before = app.editor.active_view().unwrap().scroll.left_col;
+
+        app.editor.settings.category_index = 1; // Editor
+        app.reload_settings_items();
+        select(&mut app, "Line Numbers");
+        app.run_settings_command("settings.activate");
+        // The list is ordered absolute, relative, relative_absolute, none, and
+        // opens on the current value.
+        for _ in 0..3 {
+            app.run_settings_command("settings.up");
+        }
+        app.run_settings_command("settings.activate");
+
+        assert_eq!(app.editor.config.line_numbers, LineNumberStyle::Absolute);
+        assert_ne!(
+            app.editor.active_view().unwrap().scroll.left_col,
+            before,
+            "the code area lost six columns to the gutter"
+        );
+        assert!(
+            cursor_is_on_screen(&app),
+            "left_col = {}: the cursor is off screen after the gutter appeared",
+            app.editor.active_view().unwrap().scroll.left_col
+        );
     }
 
     #[test]

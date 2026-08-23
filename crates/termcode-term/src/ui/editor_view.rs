@@ -2,10 +2,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
-use unicode_width::UnicodeWidthChar;
 
-use crate::display_width::char_index_to_display_col;
-use termcode_core::config_types::LineNumberStyle;
+use crate::display_width::TabStops;
+use termcode_core::config_types::{EditorConfig, LineNumberStyle};
 use termcode_core::diagnostic::DiagnosticSeverity;
 use termcode_theme::theme::Theme;
 use termcode_view::document::Document;
@@ -20,7 +19,10 @@ pub struct EditorViewWidget<'a> {
     theme: &'a Theme,
     mode: EditorMode,
     search: Option<&'a SearchState>,
-    line_number_style: LineNumberStyle,
+    /// The whole editor config rather than a `LineNumberStyle`: the widget needs
+    /// both `line_numbers` and `tab_size`, and one borrow carries every display
+    /// setting the next one will need too.
+    config: &'a EditorConfig,
     is_active: bool,
 }
 
@@ -42,17 +44,35 @@ fn blend_color(
     }
 }
 
-/// Display width of `line`, stopping once `cap` columns are reached.
-/// Bounded so minified lines far wider than the viewport are not fully scanned.
-fn display_width_capped(line: &str, cap: usize) -> usize {
-    let mut width = 0usize;
-    for ch in line.chars() {
-        if width >= cap {
-            break;
-        }
-        width += ch.width().unwrap_or(0);
+/// The columns of a character that fall inside the viewport: the one clipping
+/// rule the main render loop, the search highlight and the selection highlight
+/// all use, so no cell is painted by one of them and left behind by another.
+///
+/// `col` is where the character starts and `next` is `TabStops::next_col` of
+/// it -- measured from **column 0 of the line**, never from `left_col`, so
+/// scrolling horizontally cannot move where a tab's stops fall.
+///
+/// A tab is clipped **per column**: it is measured whole and whichever of its
+/// columns are on screen are painted, which is what draws one straddling either
+/// edge of the viewport. Every other character is all-or-nothing -- half a CJK
+/// glyph is not a glyph, so one straddling an edge is dropped rather than drawn
+/// as a stray blank.
+fn visible_span(
+    col: usize,
+    next: usize,
+    ch: char,
+    left_col: usize,
+    visible_end: usize,
+) -> std::ops::Range<usize> {
+    if ch == '\t' {
+        // `Range` is empty rather than panicking when the start passes the end,
+        // which is what a tab entirely off either side of the viewport gives.
+        col.max(left_col)..next.min(visible_end)
+    } else if next > col && col >= left_col && next <= visible_end {
+        col..next
+    } else {
+        col..col
     }
-    width.min(cap)
 }
 
 impl<'a> EditorViewWidget<'a> {
@@ -62,7 +82,7 @@ impl<'a> EditorViewWidget<'a> {
         theme: &'a Theme,
         mode: EditorMode,
         search: Option<&'a SearchState>,
-        line_number_style: LineNumberStyle,
+        config: &'a EditorConfig,
         is_active: bool,
     ) -> Self {
         Self {
@@ -71,7 +91,7 @@ impl<'a> EditorViewWidget<'a> {
             theme,
             mode,
             search,
-            line_number_style,
+            config,
             is_active,
         }
     }
@@ -80,7 +100,11 @@ impl<'a> EditorViewWidget<'a> {
 impl Widget for EditorViewWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let line_count = self.doc.buffer.line_count();
-        let gutter_width = line_number_width_styled(line_count, self.line_number_style);
+        let gutter_width = line_number_width_styled(line_count, self.config.line_numbers);
+        // Built once for the whole frame: every column this widget paints or
+        // measures is a fold over `tabs.next_col`, so there is exactly one
+        // place a tab's width is decided.
+        let tabs = TabStops::from_config(self.config);
         let top_line = self.view.scroll.top_line;
         let visible_lines = area.height as usize;
 
@@ -117,8 +141,8 @@ impl Widget for EditorViewWidget<'_> {
             }
 
             let is_cursor_line = line_idx == self.view.cursor.line;
-            if self.line_number_style != LineNumberStyle::None {
-                let display_num = match self.line_number_style {
+            if self.config.line_numbers != LineNumberStyle::None {
+                let display_num = match self.config.line_numbers {
                     LineNumberStyle::Absolute => line_idx + 1,
                     LineNumberStyle::Relative => {
                         if is_cursor_line {
@@ -249,34 +273,37 @@ impl Widget for EditorViewWidget<'_> {
                 if col >= visible_end {
                     break;
                 }
-                if ch == '\t' {
-                    let tab_width = 4 - (col % 4);
-                    for _ in 0..tab_width {
-                        if col >= left_col && col < visible_end {
-                            let x = code_start + (col - left_col) as u16;
-                            buf[(x, y)].set_char(' ').set_style(char_styles[byte_idx]);
-                        }
-                        col += 1;
-                    }
-                } else {
-                    let ch_width = ch.width().unwrap_or(0);
-                    // Render only if the full character fits (no partial wide char)
-                    if ch_width > 0 && col >= left_col && col + ch_width <= visible_end {
-                        let x = code_start + (col - left_col) as u16;
-                        buf[(x, y)].set_char(ch).set_style(char_styles[byte_idx]);
-                        for offset in 1..ch_width as u16 {
-                            buf[(x + offset, y)]
-                                .set_char(' ')
-                                .set_style(char_styles[byte_idx]);
-                        }
-                    }
-                    col += ch_width;
+                // Exactly one place a column advances, whatever the character
+                // is: a tab, a CJK glyph and a combining mark are all folded
+                // through `next_col`, so the drawn column and every measured
+                // one come from the same arithmetic.
+                let next = tabs.next_col(col, ch);
+                let span = visible_span(col, next, ch, left_col, visible_end);
+                for (offset, c) in span.enumerate() {
+                    let x = code_start + (c - left_col) as u16;
+                    // The character is drawn in its first column; its
+                    // remaining cells are blanked so a wide glyph does not
+                    // leave the old background showing beside it. A tab is
+                    // blank the whole way across -- the terminal never sees the
+                    // `\t` itself, only the columns it expanded to.
+                    let symbol = if offset == 0 && ch != '\t' { ch } else { ' ' };
+                    buf[(x, y)]
+                        .set_char(symbol)
+                        .set_style(char_styles[byte_idx]);
                 }
+                col = next;
             }
 
             if is_cursor_line && self.is_active {
-                let cursor_display_col =
-                    char_index_to_display_col(line_text, self.view.cursor.column);
+                // The cursor sits at the **first** column of its character --
+                // on a tab, the column the loop above starts painting it at.
+                // That is what makes this REVERSED cell and the popup anchor
+                // `render::cursor_screen_position` returns name the same cell,
+                // and what keeps the click round trip idempotent: clicking
+                // where the cursor already is leaves it alone. The bounds below
+                // are that anchor's too, so where nothing is drawn nothing is
+                // anchored either.
+                let cursor_display_col = tabs.col_at_char(line_text, self.view.cursor.column);
                 if cursor_display_col >= left_col && cursor_display_col < visible_end {
                     let cursor_x = code_start + (cursor_display_col - left_col) as u16;
                     let cell = &mut buf[(cursor_x, y)];
@@ -297,15 +324,28 @@ impl Widget for EditorViewWidget<'_> {
                     DiagnosticSeverity::Info => self.theme.ui.info.to_ratatui(),
                     DiagnosticSeverity::Hint => self.theme.ui.hint.to_ratatui(),
                 };
+                // Both ends through `col_at_char`, so a diagnostic spanning a
+                // tab underlines the tab's whole expansion rather than the zero
+                // columns a per-character width gave it.
                 let start_col = if diag.range.0.line == line_idx {
-                    char_index_to_display_col(line_text, diag.range.0.column)
+                    tabs.col_at_char(line_text, diag.range.0.column)
                 } else {
                     0
                 };
                 let end_col = if diag.range.1.line == line_idx {
-                    char_index_to_display_col(line_text, diag.range.1.column)
+                    tabs.col_at_char(line_text, diag.range.1.column)
                 } else {
-                    display_width_capped(line_text, visible_end)
+                    // A diagnostic that runs past this line is underlined to
+                    // the line's end, capped at the last visible column so a
+                    // minified line is not walked to draw it. The cap bounds
+                    // characters as well as columns, so on a line whose first
+                    // `visible_end` characters carry no width -- combining
+                    // marks, and only those now that a tab is measured as the
+                    // columns it is drawn in -- this returns short and the
+                    // underline stops early or vanishes. Bounding the scan is
+                    // worth more than an exact underline on a line of that
+                    // shape.
+                    tabs.width_capped(line_text, visible_end)
                 };
                 for c in start_col.max(left_col)..end_col.min(visible_end) {
                     let x = code_start + (c - left_col) as u16;
@@ -362,18 +402,24 @@ impl Widget for EditorViewWidget<'_> {
                             if byte_cursor >= end_in_line || display_col >= search_visible_end {
                                 break;
                             }
-                            let ch_width = ch.width().unwrap_or(0);
-                            if byte_cursor >= start_in_line && display_col >= search_left_col {
-                                for offset in 0..ch_width {
-                                    let c = display_col + offset;
-                                    if c >= search_visible_end {
-                                        break;
-                                    }
+                            // The same fold and the same clipping as the render
+                            // loop above: a match spanning a tab is highlighted
+                            // across the tab's whole expansion, which measuring
+                            // it as zero columns painted as nothing at all.
+                            let next = tabs.next_col(display_col, ch);
+                            if byte_cursor >= start_in_line {
+                                for c in visible_span(
+                                    display_col,
+                                    next,
+                                    ch,
+                                    search_left_col,
+                                    search_visible_end,
+                                ) {
                                     let x = search_code_start + (c - search_left_col) as u16;
                                     buf[(x, y)].set_bg(bg);
                                 }
                             }
-                            display_col += ch_width;
+                            display_col = next;
                             byte_cursor += ch_len;
                         }
                     }
@@ -422,18 +468,18 @@ impl Widget for EditorViewWidget<'_> {
                     if byte_cursor >= end_in_line || display_col >= sel_visible_end {
                         break;
                     }
-                    let ch_width = ch.width().unwrap_or(0);
-                    if byte_cursor >= start_in_line && display_col >= sel_left_col {
-                        for offset in 0..ch_width {
-                            let c = display_col + offset;
-                            if c >= sel_visible_end {
-                                break;
-                            }
+                    // As in the render loop and the search highlight: a
+                    // selection over a tab-indented line covers the indent,
+                    // which a zero-column tab left blank.
+                    let next = tabs.next_col(display_col, ch);
+                    if byte_cursor >= start_in_line {
+                        for c in visible_span(display_col, next, ch, sel_left_col, sel_visible_end)
+                        {
                             let x = sel_code_start + (c - sel_left_col) as u16;
                             buf[(x, y)].set_bg(sel_bg);
                         }
                     }
-                    display_col += ch_width;
+                    display_col = next;
                     byte_cursor += ch_len;
                 }
             }
@@ -456,6 +502,9 @@ pub fn line_number_width_styled(line_count: usize, style: LineNumberStyle) -> u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The capped-scan tests moved with the scan itself, onto `TabStops` in
+    // `crate::display_width`.
 
     #[test]
     fn line_number_width_none_returns_zero() {

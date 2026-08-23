@@ -42,6 +42,7 @@ pane_active_bg = "active"
 pane_inactive_fg = "fg_dim"
 pane_inactive_bg = "bg_light"
 panel_borders = true
+scrollbar_thumb = "fg_dim"
 
 [scopes]
 "attribute" = { fg = "yellow" }
