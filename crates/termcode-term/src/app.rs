@@ -872,6 +872,9 @@ impl App {
             MouseAction::ExplorerCommand(command) => self.dispatch_explorer_command(command),
             MouseAction::SidebarResized(width) => self.persist_sidebar_width(width),
             MouseAction::ScrollSettings(direction) => self.scroll_settings(direction),
+            MouseAction::SettingsCategory(index) => self.click_settings_category(index),
+            MouseAction::SettingsItem(index) => self.click_settings_item(index),
+            MouseAction::SettingsOption(index) => self.click_settings_option(index),
         }
     }
 

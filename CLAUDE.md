@@ -285,6 +285,34 @@ fills them the same way the command palette is fed its command list. Everything
 about a row that the frontend needs -- the value, where it is written, whether it
 needs a restart -- travels in `SettingItem`.
 
+The screen is modal for the mouse as well as the keyboard. Every region behind
+the popup switches the mode when it is clicked -- the tree, the tab bar, the
+editor area, the top bar's own buttons -- so a click that missed used to close a
+screen the user was in the middle of. `mouse::handle_mouse` now answers clicks
+on the screen itself and swallows everything else, exactly as it does for the
+confirm dialog; dismissing is `Esc`'s job. The wheel still goes through
+`handle_wheel`, which already owns the rule that a popup keeps its notches.
+
+`ui::settings::layout` is the single source of the screen's geometry -- the
+popup, the two panes, the divider column and the value list -- shared by the
+widget and `mouse.rs`, as `confirm_dialog::layout` and
+`explorer_toolbar::buttons` are. It carries `first_category` and `first_item`
+with the rects, since both panes scroll and a row number alone does not say
+which entry it is.
+
+`mouse.rs` decides *which row the pointer is on* and nothing else
+(`MouseAction::SettingsCategory` / `SettingsItem` / `SettingsOption`).
+Rebuilding the category's rows, saving a value and previewing a theme are all
+`App`'s, and `click_settings_*` go back through `move_selection`,
+`picker_move` and `run_settings_command` rather than writing the state
+directly: deciding it twice is how the mouse and the keyboard drift apart.
+
+A click on an item selects it and a second click on the row already selected
+runs it -- the same select-then-act the tree and the confirm dialog use, so
+changing a keymap or starting an install is not one misplaced click away, and a
+double click (two presses) activates. The value list owns the screen while it is
+open, for the mouse as `run_picker_command` does for the keyboard.
+
 The screen is three levels deep and the arrows move between them, never editing:
 `settings.focus_in` (Right) steps categories → settings, `settings.focus_out`
 (Left) steps back out and also closes an open value list. `settings.activate`
