@@ -7,6 +7,18 @@ pub fn config_dir() -> PathBuf {
     dirs_or_default("termcode")
 }
 
+/// Where `install.sh` puts the binary: `~/.local/bin/termcode`, on every
+/// platform that script supports. `None` when the home directory is unknown.
+///
+/// Here rather than next to the update check because it is the same knowledge
+/// as [`config_dir`]: what layout the installer creates. The updater compares
+/// the running executable against it before handing an install back to the
+/// script, so a binary from `cargo install`, a package manager or `target/`
+/// is never replaced by one the user did not put there.
+pub fn installed_binary_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".local").join("bin").join("termcode"))
+}
+
 /// Get runtime directories to search for themes, plugins, and queries.
 ///
 /// Returns directories in priority order (first match wins):

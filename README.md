@@ -78,6 +78,22 @@ xattr -c ./termcode && codesign --force --sign - ./termcode
 `curl` and `tar` are the only requirements. Linux binaries are glibc builds
 (`*-unknown-linux-gnu`); on a musl-only distro such as Alpine, build from source.
 
+Every release publishes `sha256sums.txt`, and the installer verifies the archive
+against it before unpacking (releases from before that file existed install with
+a warning instead).
+
+### Updating
+
+`F2` -> **Update** shows the version you are running and the newest release, and
+`Install Update` quits the editor and runs the installer for you -- two presses,
+so the exact command is shown before anything happens. It is offered only when
+`~/.local/bin/termcode` is the binary you are actually running; a termcode from
+`cargo install` or a package manager is left to whoever installed it. On Windows,
+download the new archive as above.
+
+Re-running the install command by hand does the same thing at any time. Set
+`[update] check_on_startup = false` to stop the editor looking.
+
 ### Windows
 
 There is no install script. Download
@@ -450,6 +466,7 @@ termcode stores all user data under `~/.config/termcode/`:
   themes/              # custom themes (.toml)
   plugins/             # Lua plugins
   sessions/            # auto-saved sessions
+  update.json          # cached answer from the last update check
 ```
 
 Config is read from one file:
@@ -483,6 +500,9 @@ respect_gitignore = true
 [keymap]
 # preset = "vim"              # "vscode" (default), "vim", "helix"; "" for the built-in keymap
 chord_timeout_ms = 1000       # gap allowed between the keys of a chord
+
+[update]
+check_on_startup = true       # ask GitHub once a day whether a newer release exists
 
 [plugins]
 enabled = true

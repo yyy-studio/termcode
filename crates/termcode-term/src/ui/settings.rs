@@ -27,6 +27,19 @@ pub fn picker_visible_rows(area_height: u16, option_count: usize) -> usize {
 /// Width of the category pane, including its divider column.
 const CATEGORY_WIDTH: u16 = 16;
 
+/// Which category the pane starts at, so `selected` is one of the `height` it
+/// can draw. Scrolls by as little as it takes, and never past the end.
+fn category_scroll(selected: usize, count: usize, height: usize) -> usize {
+    if height == 0 || count <= height {
+        return 0;
+    }
+    // One row past the selection, minus a screenful: the least that brings it
+    // into view from below. Clamped to the last full screen, so the pane never
+    // shows blank rows under a list that still has entries above.
+    let below = (selected + 1).saturating_sub(height);
+    below.min(count - height)
+}
+
 /// Share of the frame the popup takes, and the caps that keep it from becoming
 /// a wall of empty space on a large terminal.
 const WIDTH_PERCENT: u16 = 70;
@@ -106,10 +119,25 @@ impl Widget for SettingsWidget<'_> {
                 .add_modifier(Modifier::BOLD),
         );
 
-        // Category pane.
+        // Category pane. The categories outnumber the rows on a short
+        // terminal, and the selected one has to be among those drawn: a
+        // highlight nobody can see is a screen with no way to tell where you
+        // are. Derived here rather than kept in the state -- the list is fixed
+        // and short, so where it starts is a function of the selection and the
+        // height, and nothing has to be kept in step with it.
         let categories_focused = self.state.focus == SettingsFocus::Categories;
-        for (i, category) in SettingsCategory::ALL.iter().enumerate() {
-            let y = inner_y + i as u16;
+        let first_category = category_scroll(
+            self.state.category_index,
+            SettingsCategory::ALL.len(),
+            list_height as usize,
+        );
+        for (row, (i, category)) in SettingsCategory::ALL
+            .iter()
+            .enumerate()
+            .skip(first_category)
+            .enumerate()
+        {
+            let y = inner_y + row as u16;
             if y >= inner_y + list_height {
                 break;
             }
@@ -357,4 +385,39 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     }
     out.push('\u{2026}');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pane_with_room_for_every_category_starts_at_the_first() {
+        assert_eq!(category_scroll(0, 5, 5), 0);
+        assert_eq!(category_scroll(4, 5, 5), 0);
+        assert_eq!(category_scroll(4, 5, 9), 0);
+    }
+
+    #[test]
+    fn a_short_pane_scrolls_just_far_enough_to_show_the_selection() {
+        // Three rows for five categories: the first three need no scroll.
+        assert_eq!(category_scroll(0, 5, 3), 0);
+        assert_eq!(category_scroll(2, 5, 3), 0);
+        assert_eq!(category_scroll(3, 5, 3), 1);
+        assert_eq!(category_scroll(4, 5, 3), 2);
+    }
+
+    #[test]
+    fn the_pane_never_scrolls_past_the_last_full_screen() {
+        // Whatever is asked for, the last row of the list is the last drawn.
+        for selected in 0..5 {
+            assert!(category_scroll(selected, 5, 3) <= 2);
+        }
+        assert_eq!(category_scroll(4, 5, 1), 4);
+        assert_eq!(
+            category_scroll(0, 5, 0),
+            0,
+            "a pane with no rows cannot scroll"
+        );
+    }
 }

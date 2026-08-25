@@ -10,3 +10,4 @@ pub mod mouse;
 pub mod render;
 pub mod session;
 pub mod ui;
+pub mod update;
