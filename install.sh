@@ -59,6 +59,54 @@ latest_tag() {
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
+# --- checksum verification --------------------------------------------------
+
+sha256_of() {
+    # Linux has sha256sum, macOS has shasum. Neither is guaranteed.
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
+verify_checksum() {
+    # verify_checksum FILE NAME TAG TMPDIR
+    #
+    # Releases published before sha256sums.txt existed do not have one, and a
+    # missing file must not stop someone installing an older version -- so the
+    # absence is a warning and the mismatch is fatal.
+    local file="$1" name="$2" tag="$3" tmpdir="$4"
+    local sums="${tmpdir}/sha256sums.txt" expected actual
+
+    if ! curl -fsSL "https://github.com/${REPO}/releases/download/${tag}/sha256sums.txt" \
+        -o "$sums" 2>/dev/null; then
+        warn "No sha256sums.txt published for ${tag}; skipping verification"
+        return 0
+    fi
+
+    expected="$(awk -v n="$name" '$2 == n || $2 == "*" n {print $1}' "$sums")"
+    if [ -z "$expected" ]; then
+        warn "${name} is not listed in sha256sums.txt; skipping verification"
+        return 0
+    fi
+
+    actual="$(sha256_of "$file")"
+    if [ -z "$actual" ]; then
+        warn "No sha256 tool found; skipping verification"
+        return 0
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        err "Checksum mismatch for ${name}
+    expected ${expected}
+    got      ${actual}"
+    fi
+    info "Checksum verified"
+}
+
 # --- interactive config setup -----------------------------------------------
 
 ask() {
@@ -131,6 +179,9 @@ setup_config() {
     ask_yn "Show file type emoji icons" "true" cfg_emoji
     ask_yn "Respect .gitignore in file tree" "true" cfg_gitignore
 
+    printf '\n  \033[1m── Updates ──\033[0m\n'
+    ask_yn "Check for new versions on startup" "true" cfg_update_check
+
     # Map line_numbers value to config format
     case "$cfg_line_numbers" in
         relative_absolute) cfg_line_numbers="relative_absolute" ;;
@@ -156,6 +207,9 @@ show_top_bar = true
 tree_style = ${cfg_tree_style}
 show_file_type_emoji = ${cfg_emoji}
 respect_gitignore = ${cfg_gitignore}
+
+[update]
+check_on_startup = ${cfg_update_check}
 CONF
 
     info "Config saved to ${CONFIG_DIR}/config.toml"
@@ -188,6 +242,8 @@ main() {
     info "Downloading ${archive_name}..."
     curl -fsSL "$url" -o "${tmpdir}/${archive_name}" \
         || err "Download failed. Check if release exists for ${target}"
+
+    verify_checksum "${tmpdir}/${archive_name}" "$archive_name" "$tag" "$tmpdir"
 
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$tmpdir"

@@ -80,11 +80,28 @@ jobs:
             tar czf "../${name}.tar.gz" "${name}"
           fi
 
+      # One line per archive, collected into a single sha256sums.txt below.
+      # install.sh verifies the archive against it before unpacking, so a
+      # truncated download or a swapped file is caught rather than installed.
+      - name: Checksum
+        shell: bash
+        run: |
+          archive="termcode-${{ matrix.target }}.${{ matrix.archive }}"
+          # macOS runners have shasum but no sha256sum.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "${archive}.sha256"
+          else
+            shasum -a 256 "$archive" > "${archive}.sha256"
+          fi
+          cat "${archive}.sha256"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: termcode-${{ matrix.target }}
-          path: termcode-*.${{ matrix.archive }}
+          path: |
+            termcode-*.${{ matrix.archive }}
+            termcode-*.${{ matrix.archive }}.sha256
 
   release:
     needs: build
@@ -94,6 +111,12 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Collect checksums
+        run: |
+          cat termcode-*.sha256 > sha256sums.txt
+          rm -f termcode-*.sha256
+          cat sha256sums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -101,3 +124,4 @@ jobs:
           files: |
             termcode-*.tar.gz
             termcode-*.zip
+            sha256sums.txt

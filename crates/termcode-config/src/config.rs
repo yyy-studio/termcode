@@ -85,6 +85,24 @@ impl Default for KeymapConfig {
     }
 }
 
+/// Checking GitHub for a newer release.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    /// Ask once a day, on start, whether a newer version has been published.
+    /// The check runs on a thread of its own and never delays the editor; a
+    /// user on an offline or restricted network turns it off here.
+    pub check_on_startup: bool,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            check_on_startup: true,
+        }
+    }
+}
+
 /// Top-level application configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -98,6 +116,8 @@ pub struct AppConfig {
     pub lsp: Vec<LspServerConfig>,
     #[serde(default)]
     pub plugins: PluginConfig,
+    #[serde(default)]
+    pub update: UpdateConfig,
 }
 
 /// UI-related configuration.
@@ -135,6 +155,7 @@ impl Default for AppConfig {
             keymap: KeymapConfig::default(),
             lsp: Vec::new(),
             plugins: PluginConfig::default(),
+            update: UpdateConfig::default(),
         }
     }
 }

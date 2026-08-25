@@ -19,11 +19,18 @@ use termcode_view::settings::{
     SettingItem, SettingTarget, SettingValue, SettingsAction, SettingsCategory, SettingsFocus,
 };
 
+use crate::update::{self, UpdateStatus};
+
 use super::{App, BUILTIN_KEYMAP, list_available_themes};
 use crate::input::{KeyResolution, mode_section_name};
 
 /// The `line_numbers` values, spelled the way `LineNumberStyle` deserialises
 /// them.
+/// Ids the [`SettingValue::Action`] rows on the update screen hand back.
+const UPDATE_CHECK: &str = "update.check";
+const UPDATE_COPY: &str = "update.copy_command";
+const UPDATE_INSTALL: &str = "update.install";
+
 const LINE_NUMBER_STYLES: [(&str, LineNumberStyle); 4] = [
     ("absolute", LineNumberStyle::Absolute),
     ("relative", LineNumberStyle::Relative),
@@ -53,6 +60,7 @@ impl App {
     }
 
     fn close_settings(&mut self) {
+        self.install_armed = None;
         self.editor.settings.cancel_capture();
         self.settings_capture.clear();
         self.editor.switch_to_default_mode();
@@ -65,6 +73,7 @@ impl App {
             SettingsCategory::Editor => self.editor_items(),
             SettingsCategory::Keybindings => self.keybinding_items(),
             SettingsCategory::Plugins => self.plugin_items(),
+            SettingsCategory::Update => self.update_items(),
         };
         self.editor.settings.load_items(items);
     }
@@ -284,6 +293,198 @@ impl App {
         items
     }
 
+    /// The update screen: what this binary is, what the last check found, and
+    /// the two buttons that act on it.
+    ///
+    /// Nothing here installs anything. The rows report and hand over a command;
+    /// replacing a running binary is the installer's job, and it already knows
+    /// about the runtime directory and macOS' quarantine flag, neither of which
+    /// is worth a second implementation inside the editor.
+    fn update_items(&self) -> Vec<SettingItem> {
+        let mut items = vec![
+            SettingItem::new(
+                "Current Version",
+                SettingValue::Info(format!("v{}", update::current_version())),
+                SettingTarget::ReadOnly,
+            ),
+            SettingItem::new(
+                "Latest Release",
+                SettingValue::Info(self.update_status.summary()),
+                SettingTarget::ReadOnly,
+            )
+            .with_detail(self.update_status.detail()),
+            SettingItem::new(
+                "Check Now",
+                SettingValue::Action {
+                    id: UPDATE_CHECK.to_string(),
+                    caption: "Check".to_string(),
+                },
+                SettingTarget::ReadOnly,
+            )
+            // A manual check ignores the day-old answer on disk: pressing this
+            // is exactly the request to go and look again.
+            .with_detail("Asks GitHub now, ignoring the cached answer"),
+        ];
+
+        // Only offered once there is something to install, so the rows are
+        // never an invitation to reinstall the version already running.
+        if matches!(self.update_status, UpdateStatus::Available(_)) {
+            // A button that always refuses is worse than no button, so where
+            // the editor cannot run the installer the row says why instead of
+            // waiting to be pressed.
+            items.push(match (self.install_check)() {
+                Ok(()) => SettingItem::new(
+                    "Install Update",
+                    SettingValue::Action {
+                        id: UPDATE_INSTALL.to_string(),
+                        caption: "Install".to_string(),
+                    },
+                    SettingTarget::ReadOnly,
+                )
+                .with_detail("Quits the editor and runs install.sh; save your work first"),
+                Err(blocker) => SettingItem::new(
+                    "Install Update",
+                    SettingValue::Info(blocker.summary()),
+                    SettingTarget::ReadOnly,
+                )
+                .with_detail(blocker.reason()),
+            });
+            items.push(
+                SettingItem::new(
+                    "Copy Install Command",
+                    SettingValue::Action {
+                        id: UPDATE_COPY.to_string(),
+                        caption: "Copy".to_string(),
+                    },
+                    SettingTarget::ReadOnly,
+                )
+                .with_detail(update::INSTALL_COMMAND),
+            );
+        }
+
+        items.push(
+            SettingItem::new(
+                "Check on Startup",
+                SettingValue::Bool(self.app_config.update.check_on_startup),
+                config_target(&["update", "check_on_startup"]),
+            )
+            .with_detail("One request a day at most; the answer is cached between starts"),
+        );
+        items
+    }
+
+    /// Fold a finished check into the editor.
+    ///
+    /// A new version is announced in the status bar rather than a popup: it is
+    /// news, not a question, and the user was in the middle of something when
+    /// the answer arrived.
+    pub(super) fn handle_update_status(&mut self, status: UpdateStatus) {
+        if let UpdateStatus::Available(release) = &status {
+            self.editor.status_message = Some(format!(
+                "termcode v{} is available (you have v{}) -- F2 > Update",
+                release.version,
+                update::current_version()
+            ));
+        }
+        self.update_status = status;
+
+        // The screen shows what the check found, so it has to be rebuilt when
+        // the answer arrives -- but not underneath a picker or a half-typed
+        // rebinding, both of which point at a row by index that a rebuild
+        // replaces.
+        if self.editor.mode == EditorMode::Settings
+            && self.editor.settings.category() == SettingsCategory::Update
+            && self.editor.settings.picker.is_none()
+            && self.editor.settings.capturing.is_none()
+        {
+            self.reload_settings_items();
+        }
+    }
+
+    /// Run the button on row `index`.
+    fn run_update_action(&mut self, index: usize) {
+        let Some(SettingValue::Action { id, .. }) = self
+            .editor
+            .settings
+            .items
+            .get(index)
+            .map(|item| item.value.clone())
+        else {
+            return;
+        };
+        match id.as_str() {
+            UPDATE_CHECK => {
+                self.install_armed = None;
+                // Shown immediately, and replaced when the thread answers: the
+                // request can take seconds, and a row that did not change would
+                // read as a button that did nothing.
+                self.update_status = UpdateStatus::Checking;
+                self.spawn_update_check(true);
+                self.reload_settings_items();
+                self.editor.settings.message = Some("Checking for updates...".to_string());
+            }
+            UPDATE_INSTALL => self.arm_or_start_install(index),
+            UPDATE_COPY => {
+                self.install_armed = None;
+                let message = match self.editor.clipboard.as_mut() {
+                    Some(clipboard) => match clipboard.set_text(update::INSTALL_COMMAND) {
+                        Ok(()) => "Install command copied to the clipboard".to_string(),
+                        Err(e) => format!("Copy failed: {e}"),
+                    },
+                    None => "No clipboard available".to_string(),
+                };
+                self.editor.settings.message = Some(message);
+            }
+            other => log::warn!("Unknown settings action '{other}'"),
+        }
+    }
+
+    /// The Install row: pressed once to arm, twice to go.
+    ///
+    /// Two presses because this one quits the editor and lets a downloaded
+    /// script replace the binary. Every other row on this screen is a setting
+    /// that can be set back; this one is not, and the second press is where the
+    /// command about to run is spelled out in full.
+    ///
+    /// Unsaved work is refused rather than routed through the quit dialog. That
+    /// dialog can be cancelled, which would leave an install armed for whenever
+    /// the editor next quit -- an action the user had backed out of, happening
+    /// later, for a different reason.
+    fn arm_or_start_install(&mut self, index: usize) {
+        if let Err(blocker) = (self.install_check)() {
+            self.install_armed = None;
+            self.editor.settings.message = Some(blocker.reason());
+            return;
+        }
+
+        let unsaved = self
+            .editor
+            .documents
+            .values()
+            .filter(|doc| doc.is_modified())
+            .count();
+        if unsaved > 0 {
+            self.install_armed = None;
+            self.editor.settings.message = Some(format!(
+                "{unsaved} unsaved file(s) -- save them before updating"
+            ));
+            return;
+        }
+
+        if self.install_armed == Some(index) {
+            self.install_armed = None;
+            self.pending_install = true;
+            self.should_quit = true;
+            return;
+        }
+
+        self.install_armed = Some(index);
+        self.editor.settings.message = Some(format!(
+            "Press again to quit and run: {}",
+            update::INSTALL_COMMAND
+        ));
+    }
+
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) {
         if self.editor.settings.capturing.is_some() {
             self.handle_settings_capture_key(key);
@@ -331,6 +532,12 @@ impl App {
     }
 
     fn run_settings_command(&mut self, cmd_id: &str) {
+        // Arming survives only a second press of the same button. Moving,
+        // switching pane, closing -- anything at all -- takes it back, so an
+        // Enter typed later for some other reason cannot start an install.
+        if cmd_id != "settings.activate" {
+            self.install_armed = None;
+        }
         if self.editor.settings.picker.is_some() {
             self.run_picker_command(cmd_id);
             return;
@@ -394,6 +601,7 @@ impl App {
     fn handle_settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::CategoryChanged => self.reload_settings_items(),
+            SettingsAction::Invoke(index) => self.run_update_action(index),
             SettingsAction::Changed(index) => self.apply_and_save_setting(index),
             // A preview is deliberately not written to disk: the user is still
             // looking, and may yet back out.
@@ -634,6 +842,10 @@ impl App {
                     crate::command::ensure_h_scroll(&mut self.editor);
                 }
             }
+            // Read at the next start, not now -- but the row is rebuilt from
+            // `app_config`, so without this the toggle would spring back the
+            // moment the category is reloaded.
+            ["update", "check_on_startup"] => self.app_config.update.check_on_startup = flag,
             // `editor.mouse_enabled` and everything under `plugins` are read
             // once during startup; there is nothing to update here.
             _ => {}
@@ -673,7 +885,7 @@ fn persist_config_value(
         SettingValue::Bool(flag) => toml_edit::Value::from(*flag),
         SettingValue::Int { value, .. } => toml_edit::Value::from(*value),
         SettingValue::Choice { .. } => toml_edit::Value::from(value.display()),
-        SettingValue::KeyBinding(_) | SettingValue::Info(_) => {
+        SettingValue::KeyBinding(_) | SettingValue::Info(_) | SettingValue::Action { .. } => {
             anyhow::bail!("this setting is not stored in config.toml")
         }
     };
@@ -686,6 +898,8 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use termcode_config::config::AppConfig;
     use termcode_view::settings::{SettingsCategory, SettingsFocus};
+
+    use crate::update::{InstallBlocker, Release};
 
     /// An app whose settings screen is open, writing to a config file of its
     /// own so the developer's real `config.toml` is never touched.
@@ -726,6 +940,350 @@ mod tests {
             .position(|item| item.label == label)
             .unwrap_or_else(|| panic!("no setting labelled {label}"));
         app.editor.settings.selected = index;
+    }
+
+    /// Put the screen on `category` and rebuild its rows.
+    fn open_category(app: &mut App, category: SettingsCategory) {
+        app.editor.settings.category_index = SettingsCategory::ALL
+            .iter()
+            .position(|c| *c == category)
+            .unwrap();
+        app.reload_settings_items();
+    }
+
+    fn a_newer_release() -> Release {
+        Release {
+            version: "999.0.0".to_string(),
+            url: "https://example.invalid/r".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_update_screen_reports_the_version_actually_running() {
+        let (mut app, _path) = app_with_settings("update-current");
+        open_category(&mut app, SettingsCategory::Update);
+        assert_eq!(
+            item_labelled(&app, "Current Version").value.display(),
+            format!("v{}", crate::update::current_version())
+        );
+        assert_eq!(
+            item_labelled(&app, "Latest Release").value.display(),
+            "not checked",
+            "nothing has been checked yet, and the row must not claim otherwise"
+        );
+    }
+
+    /// Every row of the widget as one string per line, so a test can ask what
+    /// actually reached the screen rather than what the state holds.
+    fn rendered_lines(app: &App) -> Vec<String> {
+        rendered_lines_in(app, 100, 30)
+    }
+
+    fn rendered_lines_in(app: &App, width: u16, height: u16) -> Vec<String> {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        crate::ui::settings::SettingsWidget::new(&app.editor.settings, &app.editor.theme)
+            .render(area, &mut buf);
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_update_category_and_its_rows_reach_the_screen() {
+        let (mut app, _path) = app_with_settings("update-render");
+        app.install_check = || Ok(());
+        open_category(&mut app, SettingsCategory::Update);
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+
+        let screen = rendered_lines(&app).join("\n");
+        assert!(screen.contains("Update"), "{screen}");
+        assert!(screen.contains("Current Version"), "{screen}");
+        assert!(screen.contains("v999.0.0"), "{screen}");
+        assert!(screen.contains("[ Check ]"), "{screen}");
+        assert!(screen.contains("[ Install ]"), "{screen}");
+        assert!(screen.contains("Copy Install Command"), "{screen}");
+    }
+
+    #[test]
+    fn a_short_screen_still_shows_the_category_you_are_in() {
+        // Five categories in a pane with room for fewer: the highlight has to
+        // be among the rows drawn, or there is no telling where you are.
+        let (mut app, _path) = app_with_settings("category-scroll");
+        open_category(&mut app, SettingsCategory::Update);
+        let screen = rendered_lines_in(&app, 100, 9).join("\n");
+        assert!(screen.contains("Update"), "{screen}");
+        assert!(
+            !screen.contains("Appearance"),
+            "the pane scrolled, so the first category is off it: {screen}"
+        );
+    }
+
+    #[test]
+    fn a_finished_check_refreshes_the_screen_it_is_showing() {
+        let (mut app, _path) = app_with_settings("update-refresh");
+        open_category(&mut app, SettingsCategory::Update);
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+
+        assert_eq!(
+            item_labelled(&app, "Latest Release").value.display(),
+            "v999.0.0"
+        );
+        assert!(
+            item_labelled(&app, "Latest Release")
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("newer")),
+            "the hint line is where there is room to say what it means"
+        );
+        assert!(
+            app.editor
+                .status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("999.0.0")),
+            "the news belongs in the status bar too: {:?}",
+            app.editor.status_message
+        );
+    }
+
+    #[test]
+    fn the_copy_row_appears_only_once_there_is_something_to_install() {
+        let (mut app, _path) = app_with_settings("update-copy-row");
+        open_category(&mut app, SettingsCategory::Update);
+        let copy_row = |app: &App| {
+            app.editor
+                .settings
+                .items
+                .iter()
+                .any(|item| item.label == "Copy Install Command")
+        };
+        assert!(!copy_row(&app), "nothing to install before a check");
+
+        app.handle_update_status(UpdateStatus::Latest);
+        assert!(!copy_row(&app), "nothing to install when already current");
+
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+        assert!(copy_row(&app));
+    }
+
+    #[test]
+    fn the_copy_row_puts_the_install_command_on_the_clipboard() {
+        let (mut app, _path) = app_with_settings("update-copy");
+        app.editor.clipboard = Some(Box::new(crate::clipboard::MockClipboard::new()));
+        open_category(&mut app, SettingsCategory::Update);
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+
+        select(&mut app, "Copy Install Command");
+        let index = app.editor.settings.selected;
+        app.run_update_action(index);
+
+        assert_eq!(
+            app.editor.clipboard.as_mut().unwrap().get_text().as_deref(),
+            Some(crate::update::INSTALL_COMMAND)
+        );
+    }
+
+    #[test]
+    fn an_answer_arriving_over_another_category_leaves_its_rows_alone() {
+        // The rows are rebuilt by index, and the screen the user is looking at
+        // is not the one the answer is about.
+        let (mut app, _path) = app_with_settings("update-elsewhere");
+        open_category(&mut app, SettingsCategory::Appearance);
+        let before = app.editor.settings.items.clone();
+
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+
+        assert_eq!(app.editor.settings.items, before);
+        assert!(matches!(app.update_status, UpdateStatus::Available(_)));
+    }
+
+    /// The Update screen with a newer release found and installing allowed.
+    fn app_ready_to_install(name: &str) -> App {
+        let (mut app, _path) = app_with_settings(name);
+        app.install_check = || Ok(());
+        open_category(&mut app, SettingsCategory::Update);
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+        select(&mut app, "Install Update");
+        app
+    }
+
+    fn press_selected(app: &mut App) {
+        app.run_settings_command("settings.activate");
+    }
+
+    #[test]
+    fn where_the_installer_cannot_run_the_row_says_why_instead_of_waiting() {
+        let (mut app, _path) = app_with_settings("install-blocked");
+        app.install_check = || Err(InstallBlocker::UnsupportedPlatform);
+        open_category(&mut app, SettingsCategory::Update);
+        app.handle_update_status(UpdateStatus::Available(a_newer_release()));
+
+        let row = item_labelled(&app, "Install Update");
+        assert!(
+            matches!(row.value, SettingValue::Info(_)),
+            "a button that always refuses is worse than no button"
+        );
+        assert!(row.detail.as_deref().is_some_and(|d| d.contains("Windows")));
+
+        // And pressing it does nothing at all.
+        select(&mut app, "Install Update");
+        press_selected(&mut app);
+        assert!(!app.should_quit);
+        assert!(!app.pending_install);
+    }
+
+    #[test]
+    fn installing_takes_two_presses_and_the_second_one_quits() {
+        let mut app = app_ready_to_install("install-two-presses");
+
+        press_selected(&mut app);
+        assert_eq!(
+            app.install_armed,
+            Some(app.editor.settings.selected),
+            "the first press only arms it"
+        );
+        assert!(!app.should_quit, "and must not quit on its own");
+        assert!(!app.pending_install);
+        assert!(
+            app.editor
+                .settings
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains(crate::update::INSTALL_COMMAND)),
+            "the second press is where the command is spelled out: {:?}",
+            app.editor.settings.message
+        );
+
+        press_selected(&mut app);
+        assert!(app.pending_install, "run() is what acts on this");
+        assert!(app.should_quit);
+        assert_eq!(app.install_armed, None);
+    }
+
+    #[test]
+    fn moving_away_takes_the_arming_back() {
+        // Otherwise an Enter typed later, for some other reason, starts an
+        // install the user had already walked away from.
+        let mut app = app_ready_to_install("install-disarm");
+        press_selected(&mut app);
+        assert!(app.install_armed.is_some());
+
+        app.run_settings_command("settings.down");
+        assert_eq!(app.install_armed, None);
+
+        select(&mut app, "Install Update");
+        press_selected(&mut app);
+        assert!(
+            !app.should_quit,
+            "that press re-arms rather than installing"
+        );
+        assert!(app.install_armed.is_some());
+    }
+
+    #[test]
+    fn unsaved_work_is_refused_rather_than_routed_through_the_quit_dialog() {
+        // That dialog can be cancelled, which would leave an install armed for
+        // whenever the editor next quit -- long after the user backed out.
+        let mut app = app_ready_to_install("install-unsaved");
+        let (doc_id, _) = app
+            .editor
+            .open_file(std::path::Path::new("Cargo.toml"))
+            .unwrap();
+        // A real edit: `Document::is_modified` compares history revisions, so
+        // setting the buffer's own flag would not make the document dirty.
+        crate::command::insert_char(&mut app.editor, 'x').unwrap();
+        assert!(app.editor.documents[&doc_id].is_modified());
+
+        open_category(&mut app, SettingsCategory::Update);
+        select(&mut app, "Install Update");
+        press_selected(&mut app);
+
+        assert_eq!(app.install_armed, None);
+        assert!(!app.should_quit);
+        assert!(
+            app.editor
+                .settings
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("unsaved")),
+            "{:?}",
+            app.editor.settings.message
+        );
+    }
+
+    /// A source that always fails. Nothing is written to the update cache on a
+    /// failure, so the whole button-to-row path runs with no network and no
+    /// files touched.
+    struct AlwaysFails;
+
+    impl crate::update::ReleaseSource for AlwaysFails {
+        fn latest(&self) -> anyhow::Result<Release> {
+            Err(anyhow::anyhow!("no route to host"))
+        }
+    }
+
+    #[test]
+    fn check_now_reports_at_once_and_again_when_the_answer_lands() {
+        let (mut app, _path) = app_with_settings("check-now");
+        app.release_source = || Box::new(AlwaysFails);
+        open_category(&mut app, SettingsCategory::Update);
+
+        select(&mut app, "Check Now");
+        press_selected(&mut app);
+        assert_eq!(
+            item_labelled(&app, "Latest Release").value.display(),
+            "checking...",
+            "a row that did not change reads as a button that did nothing"
+        );
+
+        // The thread answers through the channel the event loop drains.
+        let event = app.async_event_rx.blocking_recv().expect("an answer");
+        app.update(event);
+
+        assert_eq!(
+            item_labelled(&app, "Latest Release").value.display(),
+            "unavailable"
+        );
+        assert!(
+            item_labelled(&app, "Latest Release")
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("no route to host")),
+            "being offline is ordinary, and the reason belongs on the hint line"
+        );
+    }
+
+    #[test]
+    fn the_startup_check_toggle_is_written_and_stays_written() {
+        let (mut app, config_path) = app_with_settings("update-toggle");
+        open_category(&mut app, SettingsCategory::Update);
+        assert_eq!(
+            item_labelled(&app, "Check on Startup").value.display(),
+            "[x]"
+        );
+
+        select(&mut app, "Check on Startup");
+        app.run_settings_command("settings.activate");
+
+        assert!(!app.app_config.update.check_on_startup);
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.contains("check_on_startup = false"), "{written}");
+
+        // Rebuilt from `app_config`, so the row would spring back if the
+        // running config had not been updated with it.
+        app.reload_settings_items();
+        assert_eq!(
+            item_labelled(&app, "Check on Startup").value.display(),
+            "[ ]"
+        );
     }
 
     #[test]

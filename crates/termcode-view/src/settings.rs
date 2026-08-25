@@ -14,14 +14,16 @@ pub enum SettingsCategory {
     Editor,
     Keybindings,
     Plugins,
+    Update,
 }
 
 impl SettingsCategory {
-    pub const ALL: [SettingsCategory; 4] = [
+    pub const ALL: [SettingsCategory; 5] = [
         SettingsCategory::Appearance,
         SettingsCategory::Editor,
         SettingsCategory::Keybindings,
         SettingsCategory::Plugins,
+        SettingsCategory::Update,
     ];
 
     pub fn title(&self) -> &'static str {
@@ -30,6 +32,7 @@ impl SettingsCategory {
             SettingsCategory::Editor => "Editor",
             SettingsCategory::Keybindings => "Keybindings",
             SettingsCategory::Plugins => "Plugins",
+            SettingsCategory::Update => "Update",
         }
     }
 }
@@ -71,6 +74,12 @@ pub enum SettingValue {
     KeyBinding(Option<String>),
     /// Text with nothing to edit.
     Info(String),
+    /// A button. Nothing is written to a config file; activating it hands
+    /// `id` back to the frontend, which is what knows how to run it.
+    ///
+    /// The row's label says what it does, so `caption` only has to look like
+    /// something that can be pressed.
+    Action { id: String, caption: String },
 }
 
 impl SettingValue {
@@ -87,6 +96,7 @@ impl SettingValue {
             SettingValue::KeyBinding(Some(keys)) => keys.clone(),
             SettingValue::KeyBinding(None) => "(unbound)".to_string(),
             SettingValue::Info(text) => text.clone(),
+            SettingValue::Action { caption, .. } => format!("[ {caption} ]"),
         }
     }
 
@@ -213,6 +223,10 @@ pub enum SettingsAction {
     /// A preview was abandoned. The item is back to the value it had before
     /// the picker opened; apply that, again without saving.
     PreviewReverted(usize),
+    /// The item at this index is a button that was pressed. Nothing changed
+    /// and nothing is to be saved; the frontend runs whatever the row stands
+    /// for.
+    Invoke(usize),
 }
 
 #[derive(Debug)]
@@ -356,6 +370,10 @@ impl SettingsState {
                 SettingsAction::CaptureKey(index)
             }
             SettingValue::Choice { .. } | SettingValue::Int { .. } => self.open_picker(),
+            SettingValue::Action { .. } => {
+                self.message = None;
+                SettingsAction::Invoke(index)
+            }
             SettingValue::Info(_) => SettingsAction::None,
         }
     }
@@ -537,7 +555,29 @@ mod tests {
         state.set_focus(SettingsFocus::Categories);
         assert_eq!(state.category(), SettingsCategory::Appearance);
         assert_eq!(state.move_selection(-1), SettingsAction::CategoryChanged);
-        assert_eq!(state.category(), SettingsCategory::Plugins);
+        // The last one, whichever it is: naming it would make adding a
+        // category look like a regression here.
+        assert_eq!(state.category(), *SettingsCategory::ALL.last().unwrap());
+    }
+
+    #[test]
+    fn a_button_is_handed_back_to_the_frontend_rather_than_saved() {
+        // Nothing on this row is written anywhere: it stands for an action
+        // only the frontend knows how to run.
+        let mut state = SettingsState::new();
+        state.load_items(vec![SettingItem::new(
+            "Check Now",
+            SettingValue::Action {
+                id: "update.check".into(),
+                caption: "Check".into(),
+            },
+            SettingTarget::ReadOnly,
+        )]);
+        assert_eq!(state.activate_selected(), SettingsAction::Invoke(0));
+        assert!(
+            state.picker.is_none(),
+            "a button has no list of values to choose from"
+        );
     }
 
     #[test]

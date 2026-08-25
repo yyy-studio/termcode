@@ -63,7 +63,13 @@ pub struct App {
     input_mapper: InputMapper,
     should_quit: bool,
     lsp_bridge: Option<LspBridge>,
-    lsp_event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Events produced off the event loop's own thread: the LSP bridge's
+    /// responses and the update check's answer. Both are drained before
+    /// crossterm is polled.
+    async_event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// The sending half of the above, kept so a check can be started at any
+    /// time. The LSP bridge is handed its own clone and may not exist at all.
+    async_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Trigger characters per language, cached from server capabilities.
     lsp_trigger_chars: HashMap<String, Vec<String>>,
     /// Last known terminal size, updated each frame for accurate mouse layout.
@@ -102,6 +108,26 @@ pub struct App {
     /// `file.save` (a formatter re-saving what it rewrote), and that save must
     /// not fire the hook again -- the two would call each other forever.
     in_before_save: bool,
+    /// What the last update check found. `Idle` until one has run, which is
+    /// also what a build with checking turned off stays at.
+    update_status: crate::update::UpdateStatus,
+    /// Where a check gets its answer. A function pointer rather than a call to
+    /// `GitHubReleases` at the two spawn sites, so a test can drive the whole
+    /// path -- button, thread, event, redrawn row -- without a network.
+    release_source: fn() -> Box<dyn crate::update::ReleaseSource>,
+    /// Whether an install can be handed to `install.sh`. A seam for the same
+    /// reason as `release_source`: the answer depends on where this binary
+    /// actually sits, which a test run out of `target/` can never satisfy --
+    /// and the logic behind the button quits the editor, so it is the last
+    /// thing that should go untested.
+    install_check: fn() -> Result<(), crate::update::InstallBlocker>,
+    /// Set by the Install row once it has been confirmed. `run()` acts on it
+    /// after the terminal has been handed back, which is the only point at
+    /// which a shell script can have it.
+    pending_install: bool,
+    /// The Install row, while it is waiting to be pressed a second time.
+    /// Holds the row index, so activating a *different* row cancels it.
+    install_armed: Option<usize>,
 }
 
 impl App {
@@ -215,12 +241,12 @@ impl App {
             editor.status_message = Some(startup_warnings.join("  |  "));
         }
 
-        let (lsp_event_tx, lsp_event_rx) = mpsc::unbounded_channel();
+        let (async_event_tx, async_event_rx) = mpsc::unbounded_channel();
 
         let lsp_bridge = if app_config.lsp.is_empty() {
             None
         } else {
-            Some(LspBridge::new(app_config.lsp, lsp_event_tx))
+            Some(LspBridge::new(app_config.lsp, async_event_tx.clone()))
         };
 
         let image_picker = Picker::from_query_stdio().ok();
@@ -273,7 +299,8 @@ impl App {
             input_mapper,
             should_quit: false,
             lsp_bridge,
-            lsp_event_rx,
+            async_event_rx,
+            async_event_tx,
             lsp_trigger_chars: HashMap::new(),
             terminal_size: (80, 24),
             mouse_enabled,
@@ -298,6 +325,11 @@ impl App {
             chord_timeout: Duration::from_millis(app_config.keymap.chord_timeout_ms),
             chord_started: None,
             in_before_save: false,
+            update_status: crate::update::UpdateStatus::Idle,
+            release_source: || Box::new(crate::update::GitHubReleases),
+            install_check: crate::update::install_readiness,
+            pending_install: false,
+            install_armed: None,
         }
     }
 
@@ -623,6 +655,14 @@ impl App {
             self.editor.switch_to_default_mode();
         }
 
+        // Started here rather than in `with_config` so that constructing an
+        // `App` -- which every test does -- never opens a socket. The thread
+        // answers through the channel the loop already drains, so the first
+        // frame does not wait for it.
+        if self.app_config.update.check_on_startup {
+            self.spawn_update_check(false);
+        }
+
         let app_result = self.event_loop(&mut terminal);
 
         if let Some(ref bridge) = self.lsp_bridge {
@@ -632,14 +672,31 @@ impl App {
 
         let restore_result = restore_terminal(&mut terminal, self.mouse_enabled);
 
-        match (app_result, restore_result) {
+        let result = match (app_result, restore_result) {
             (Err(app_err), Err(restore_err)) => Err(anyhow::anyhow!(
                 "{app_err}; additionally failed to restore terminal: {restore_err}"
             )),
             (Err(app_err), Ok(())) => Err(app_err),
             (Ok(()), Err(restore_err)) => Err(restore_err),
             (Ok(()), Ok(())) => Ok(()),
+        };
+
+        // Only once the terminal is back in its ordinary state, and only when
+        // putting it back worked: the installer prints, and may ask, and both
+        // need a terminal that is not in raw mode inside an alternate screen.
+        if result.is_ok() && self.pending_install {
+            return crate::update::run_installer();
         }
+        result
+    }
+
+    /// Ask, on a thread, whether a newer release exists.
+    fn spawn_update_check(&self, force: bool) {
+        crate::update::spawn_check_with(
+            self.async_event_tx.clone(),
+            force,
+            (self.release_source)(),
+        );
     }
 
     /// The first frame, then an event at a time until something quits.
@@ -662,8 +719,8 @@ impl App {
         self.dispatch_plugin_hook(HookEvent::OnReady);
 
         loop {
-            while let Ok(lsp_event) = self.lsp_event_rx.try_recv() {
-                self.update(lsp_event);
+            while let Ok(event) = self.async_event_rx.try_recv() {
+                self.update(event);
             }
 
             let event = self.event_handler.next()?;
@@ -773,6 +830,7 @@ impl App {
             }
             AppEvent::Tick => self.expire_pending_chord(),
             AppEvent::Lsp(response) => self.handle_lsp_response(response),
+            AppEvent::Update(status) => self.handle_update_status(status),
         }
     }
 

@@ -26,6 +26,11 @@ tree_style = true
 show_file_type_emoji = true
 respect_gitignore = false
 
+[update]
+# Ask GitHub once a day, on startup, whether a newer release exists. Nothing is
+# downloaded or installed; see the Update page of the settings screen (F2).
+check_on_startup = true
+
 [plugins]
 enabled = true
 

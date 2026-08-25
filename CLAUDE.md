@@ -82,13 +82,19 @@ input, confirm dialog, `Ctrl+Q` — contexts where typing them would be wrong),
 `recover_pending_chord()` enters them as text where they were typed (timeout,
 completion popup stealing a key).
 
-LSP events flow separately:
+Events produced off the event loop's thread flow separately, through one
+channel drained before crossterm is polled:
 
 ```
-LspBridge (tokio runtime) → mpsc::UnboundedSender<AppEvent::Lsp>
-  → App drains lsp_event_rx via try_recv before crossterm poll
-  → Updates diagnostics/completion/hover state in Editor
+LspBridge (tokio runtime) ─┐
+update::spawn_check (std thread) ─┴→ mpsc::UnboundedSender<AppEvent>
+  → App drains async_event_rx via try_recv before crossterm poll
+  → Updates diagnostics/completion/hover state, or App.update_status
 ```
+
+`App.async_event_tx` is the sending half, kept on `App` so a check can be
+started at any time; `LspBridge` is handed its own clone and may not exist at
+all.
 
 ### State Ownership
 
@@ -260,8 +266,8 @@ File type icons are configured per-theme via `[icons]` section (directory_open, 
 `EditorMode::Settings` (`F2`, the top bar button, or `settings.open` from the
 palette -- the button goes through `MouseAction::OpenSettings`, since building
 the rows needs `App`) is a two-pane popup: a fixed list of categories
-(Appearance, Editor, Keybindings, Plugins) and the rows of the selected one. It
-resolves keys like the other overlays -- mode table only, no global fallback --
+(Appearance, Editor, Keybindings, Plugins, Update) and the rows of the selected
+one. It resolves keys like the other overlays -- mode table only, no global fallback --
 so a shortcut cannot navigate away from a screen the user is in the middle of.
 
 The popup floats over the **whole frame**, not over the editor area: what it
@@ -338,10 +344,79 @@ consult that table. `keybindings.toml` is indexed by key, so a new binding
 (`InputMapper::bindings_for`) instead of the first, and `InputMapper::conflicts`
 reports sequences the new one collides with or shadows.
 
+`SettingValue::Action` is the one row that is neither read from nor written to
+a config file: it is a button, and activating it returns `SettingsAction::Invoke`
+carrying the row index rather than `Changed`. The row's `id` -- not its label --
+is what `App::run_update_action` dispatches on, so renaming a button cannot
+change what it does. `persist_config_value` refuses one outright: there is
+nothing to store.
+
 `config.toml` keys that nothing reads (`ui.show_tab_bar`, `ui.show_top_bar`,
 `ui.show_minimap`, `editor.word_wrap`, `editor.auto_save*`) are deliberately not
 listed on this screen: a settings row that does nothing when toggled is worse
 than no row.
+
+### Update Check
+
+`update.rs` asks the GitHub releases API whether a newer tag exists, on a
+detached `std::thread`, and posts the answer back as `AppEvent::Update`. It is
+started from `App::run()` and **not** from `with_config`, so constructing an
+`App` -- which every test does -- never opens a socket.
+
+The answer is cached in `~/.config/termcode/update.json` for a day
+(`UpdateCache::is_fresh`); a start within that window makes no request and still
+knows what it knew. `Check Now` passes `force = true`, which is what that button
+means. A clock wound backwards reads as "just checked" rather than "fresh
+forever", which is the harmless direction: being a day late with a version
+number costs nothing.
+
+`Version` compares numerically because string comparison puts `0.10.0` before
+`0.9.0`, and a pre-release sorts before the release it leads to. A tag it cannot
+parse becomes `UpdateStatus::Failed` rather than a version of zero, which would
+claim every release is newer.
+
+`ReleaseSource` is a trait so the decision -- cache, request, comparison -- can
+be tested without a network; CI has none, and the button's own `spawn_check` is
+deliberately left out of the tests rather than given a seam that only tests use.
+
+Installing is handed straight back to `install.sh`. That script already knows
+where the binary and the `runtime/` directory go, that macOS quarantines a
+downloaded executable, and how to leave an existing `config.toml` alone; a
+second implementation inside the editor would have to learn all of it again and
+would be the copy that goes stale. What lives here is the decision of *whether*
+to run it.
+
+`install_readiness()` refuses unless the running executable is
+`~/.local/bin/termcode` -- `default::installed_binary_path`, which sits beside
+`config_dir` because it is the same knowledge: what layout the installer
+creates. A binary from `cargo install`, a package manager or `target/` belongs
+to whoever put it there. Windows is refused outright -- there is no `install.ps1`
+-- and so is a missing `sh` or `curl`. Where it refuses, the row is an `Info`
+saying why rather than a button: a button that always refuses is worse than no
+button.
+
+The install itself runs from `App::run()` **after** `restore_terminal`, gated on
+`App.pending_install`, because a shell script needs the terminal out of raw mode
+and out of the alternate screen. The editor is not restarted afterwards: the
+process still running is the old one, and re-executing it would run the old code
+while claiming to be the update.
+
+Two presses arm it (`App.install_armed`, holding the row index), and any other
+settings command takes the arming back. Unsaved work is **refused** rather than
+routed through the quit dialog: that dialog can be cancelled, which would leave
+an install armed for whenever the editor next quit -- an action the user had
+backed out of, happening later, for a different reason.
+
+`App.release_source` and `App.install_check` are function-pointer seams. Both
+answers depend on the machine the editor is running on -- a network, and where
+this binary sits -- which a test out of `target/` can never satisfy, and the
+logic behind the Install button quits the editor.
+
+The category pane derives where it starts from the selection and its own height
+(`ui::settings::category_scroll`) rather than keeping a scroll offset in the
+state: the list is fixed and five entries long, so there is nothing to keep in
+step. Without it a short terminal draws the first few categories and hides the
+highlight, which is a screen with no way to tell where you are.
 
 ### File Explorer
 

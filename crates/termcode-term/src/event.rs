@@ -3,6 +3,8 @@ use std::time::Duration;
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
 use termcode_lsp::types::LspResponse;
 
+use crate::update::UpdateStatus;
+
 /// All events the application can process.
 pub enum AppEvent {
     Key(KeyEvent),
@@ -10,6 +12,8 @@ pub enum AppEvent {
     Resize(u16, u16),
     Tick,
     Lsp(LspResponse),
+    /// The answer from a background update check.
+    Update(UpdateStatus),
 }
 
 /// Where `App`'s loop gets its events.

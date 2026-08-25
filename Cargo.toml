@@ -90,6 +90,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Clipboard
 arboard = "3"
 
+# HTTP (update check)
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 # Lua
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 
