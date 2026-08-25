@@ -531,6 +531,65 @@ impl App {
         }
     }
 
+    /// A click on a category row.
+    ///
+    /// Selecting a category is what the arrows do, so it goes through the same
+    /// `move_selection` rather than writing `category_index` here: the rows of
+    /// the category moved to have to be rebuilt, and that reload is what
+    /// `SettingsAction::CategoryChanged` asks for.
+    pub(super) fn click_settings_category(&mut self, index: usize) {
+        self.install_armed = None;
+        self.editor.settings.set_focus(SettingsFocus::Categories);
+        let delta = index as i32 - self.editor.settings.category_index as i32;
+        if delta == 0 {
+            return;
+        }
+        let action = self.editor.settings.move_selection(delta);
+        self.handle_settings_action(action);
+    }
+
+    /// A click on a setting.
+    ///
+    /// The first click selects the row and a second one on the row already
+    /// selected runs it -- the same select-then-act the tree and the confirm
+    /// dialog use, and for the same reason: changing a keymap, or starting an
+    /// install, should not be one misplaced click away. A double click is two
+    /// presses, so it activates, which is what a double click is expected to
+    /// do anyway.
+    pub(super) fn click_settings_item(&mut self, index: usize) {
+        let already_there = self.editor.settings.focus == SettingsFocus::Items
+            && self.editor.settings.selected == index;
+        if already_there {
+            // Not `activate_selected` directly: the picker, the capture and the
+            // Install row's arming all hang off the command, and this is the
+            // one place that knows about them.
+            self.run_settings_command("settings.activate");
+            return;
+        }
+        self.install_armed = None;
+        self.editor.settings.set_focus(SettingsFocus::Items);
+        let delta = index as i32 - self.editor.settings.selected as i32;
+        let action = self.editor.settings.move_selection(delta);
+        self.handle_settings_action(action);
+    }
+
+    /// A click on the open value list, under the item pane's rule.
+    ///
+    /// Moving goes through `picker_move` so a previewing row -- the theme --
+    /// applies as the highlight lands, exactly as it does under the arrows.
+    pub(super) fn click_settings_option(&mut self, index: usize) {
+        let Some(picker) = &self.editor.settings.picker else {
+            return;
+        };
+        if picker.selected == index {
+            self.run_settings_command("settings.activate");
+            return;
+        }
+        let delta = index as i32 - picker.selected as i32;
+        let action = self.editor.settings.picker_move(delta);
+        self.handle_settings_action(action);
+    }
+
     fn run_settings_command(&mut self, cmd_id: &str) {
         // Arming survives only a second press of the same button. Moving,
         // switching pane, closing -- anything at all -- takes it back, so an
@@ -1629,6 +1688,181 @@ mod tests {
         app.editor.settings.selected = 0;
     }
 
+    #[test]
+    fn the_screen_owns_the_mouse_while_it_is_up() {
+        // Every region behind the popup switches the mode when it is clicked,
+        // which would close a screen the user is in the middle of. A click that
+        // misses is swallowed instead -- dismissing is Esc's job.
+        let (mut app, _path) = app_with_settings("mouse-modal");
+        app.terminal_size = (120, 24);
+        app.editor.file_explorer.visible = true;
+        app.editor.file_explorer.width = 30;
+        let before = app.editor.file_explorer.width;
+
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let at = |kind, x, y| crossterm::event::MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // The sidebar divider, the tree, the tab bar and the top bar's own
+        // buttons all sit outside the popup.
+        app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), 29, 5));
+        app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), 37, 5));
+        app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), 37, 5));
+        app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), 118, 0));
+
+        assert_eq!(app.editor.mode, EditorMode::Settings, "still open");
+        assert_eq!(
+            app.editor.file_explorer.width, before,
+            "the divider behind the popup did not move"
+        );
+        assert!(!app.should_quit, "nor did the Exit button fire");
+    }
+
+    /// Where the settings screen lands in a `width` x `height` terminal.
+    fn placed(app: &App, width: u16, height: u16) -> crate::ui::settings::SettingsLayout {
+        crate::ui::settings::layout(
+            &app.editor.settings,
+            ratatui::layout::Rect::new(0, 0, width, height),
+        )
+        .expect("the screen fits")
+    }
+
+    fn click(app: &mut App, x: u16, y: u16) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn clicking_a_category_moves_to_it_and_loads_its_rows() {
+        let (mut app, _path) = app_with_settings("mouse-category");
+        app.terminal_size = (120, 40);
+        let layout = placed(&app, 120, 40);
+
+        // The Editor category, one row below Appearance.
+        click(&mut app, layout.categories.x + 2, layout.categories.y + 1);
+
+        assert_eq!(app.editor.settings.category(), SettingsCategory::Editor);
+        assert_eq!(app.editor.settings.focus, SettingsFocus::Categories);
+        item_labelled(&app, "Tab Size");
+    }
+
+    #[test]
+    fn clicking_a_setting_selects_it_and_a_second_click_runs_it() {
+        // Select-then-act, as on the tree and the confirm dialog: changing a
+        // keymap should not be one misplaced click away.
+        let (mut app, config_path) = app_with_settings("mouse-item");
+        app.terminal_size = (120, 40);
+        open_category(&mut app, SettingsCategory::Update);
+        let layout = placed(&app, 120, 40);
+        let row = app
+            .editor
+            .settings
+            .items
+            .iter()
+            .position(|item| item.label == "Check on Startup")
+            .unwrap();
+        let y = layout.items.unwrap().y + row as u16;
+        let x = layout.items.unwrap().x + 2;
+
+        click(&mut app, x, y);
+        assert_eq!(app.editor.settings.selected, row, "the first click selects");
+        assert_eq!(app.editor.settings.focus, SettingsFocus::Items);
+        assert!(
+            app.app_config.update.check_on_startup,
+            "and changes nothing"
+        );
+
+        click(&mut app, x, y);
+        assert!(
+            !app.app_config.update.check_on_startup,
+            "the second runs it"
+        );
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.contains("check_on_startup = false"), "{written}");
+    }
+
+    #[test]
+    fn a_click_that_misses_every_row_changes_nothing() {
+        let (mut app, _path) = app_with_settings("mouse-miss");
+        app.terminal_size = (120, 40);
+        let layout = placed(&app, 120, 40);
+        let before = app.editor.settings.selected;
+        let focus_before = app.editor.settings.focus;
+
+        // The frame itself, and the hint line at the bottom.
+        click(&mut app, layout.popup.x, layout.popup.y);
+        click(
+            &mut app,
+            layout.popup.x + 4,
+            layout.popup.y + layout.popup.height - 2,
+        );
+
+        assert_eq!(app.editor.mode, EditorMode::Settings);
+        assert_eq!(app.editor.settings.selected, before);
+        // Focus too: a row range one off at the top would put the border row on
+        // the first category, which moves the focus without moving anything else.
+        assert_eq!(app.editor.settings.focus, focus_before);
+    }
+
+    #[test]
+    fn the_value_list_owns_the_screen_behind_it() {
+        // Under the keyboard `run_picker_command` swallows everything else, and
+        // a click behind the list would otherwise act on rows nobody can see.
+        //
+        // Line Numbers, not Keymap Preset: a keymap list is whatever is on
+        // disk, which is several entries on a machine with termcode installed
+        // and one on a machine without it. This one is always the same four.
+        let (mut app, _path) = app_with_settings("mouse-picker");
+        app.terminal_size = (120, 40);
+        open_category(&mut app, SettingsCategory::Editor);
+        select(&mut app, "Line Numbers");
+        app.run_settings_command("settings.activate");
+        let chosen = app.editor.settings.picker.as_ref().unwrap().selected;
+        assert!(
+            app.editor.settings.picker.as_ref().unwrap().options.len() > 1,
+            "the list needs a second row to click"
+        );
+
+        let layout = placed(&app, 120, 40);
+        let picker = layout.picker.clone().expect("the list is drawn");
+
+        // A click on the category pane, which is behind the list.
+        click(&mut app, layout.categories.x + 2, layout.categories.y);
+        assert!(app.editor.settings.picker.is_some(), "the list stayed open");
+        assert_eq!(
+            app.editor.settings.category(),
+            SettingsCategory::Editor,
+            "and nothing behind it moved"
+        );
+
+        // A click on an option moves the highlight; a second one commits.
+        let target = if chosen == 0 { 1 } else { 0 };
+        let y = picker.options.y + (target - picker.first_option) as u16;
+        click(&mut app, picker.options.x + 1, y);
+        assert_eq!(
+            app.editor.settings.picker.as_ref().unwrap().selected,
+            target
+        );
+        assert_eq!(
+            app.editor.config.line_numbers,
+            LineNumberStyle::Absolute,
+            "nothing is applied while the list is still open"
+        );
+
+        click(&mut app, picker.options.x + 1, y);
+        assert!(app.editor.settings.picker.is_none(), "the second commits");
+        assert_eq!(app.editor.config.line_numbers, LineNumberStyle::Relative);
+    }
+
     fn width_row() -> SettingItem {
         SettingItem::new(
             "Sidebar Width",
@@ -1645,6 +1879,10 @@ mod tests {
     #[test]
     fn a_width_dragged_out_with_the_mouse_lands_in_the_config_file() {
         let (mut app, config_path) = app_with_settings("mouse-resize");
+        // The fixture is only here for its config file. The screen itself has
+        // to be shut: while it is up it owns the mouse, and the divider behind
+        // it is not there to be dragged.
+        app.editor.switch_to_default_mode();
         app.terminal_size = (120, 24);
         app.editor.file_explorer.visible = true;
         app.editor.file_explorer.width = 30;

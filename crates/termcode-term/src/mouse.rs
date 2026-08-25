@@ -31,6 +31,15 @@ pub enum MouseAction {
     /// it, so the move goes back to `App` and down the same path the keyboard
     /// uses rather than being applied here.
     ScrollSettings(i32),
+    /// A click landed on this row of the settings screen's category pane.
+    /// Only the row is decided here: which category that is, and what loading
+    /// it costs, is `App`'s -- exactly as with `OpenSettings`, since building
+    /// the rows needs `App`.
+    SettingsCategory(usize),
+    /// A click landed on this row of the settings screen's item pane.
+    SettingsItem(usize),
+    /// A click landed on this row of the open value list.
+    SettingsOption(usize),
 }
 
 /// Rows one wheel notch moves, matching what the editor scrolls by.
@@ -45,6 +54,25 @@ pub fn handle_mouse(editor: &mut Editor, event: MouseEvent, layout: &AppLayout) 
             MouseEventKind::Down(MouseButton::Left) => {
                 handle_confirm_click(editor, event.column, event.row, layout.frame)
             }
+            _ => MouseAction::None,
+        };
+    }
+
+    // The settings screen is modal for the mouse as well, for the same reason
+    // the confirm dialog is: every region behind it switches the mode when it
+    // is clicked, which would close a screen the user is in the middle of. A
+    // click that misses is swallowed -- dismissing is `Esc`'s job, and a stray
+    // click must not discard a half-made change.
+    //
+    // The wheel still goes through `handle_wheel`, which already owns the
+    // rule that a popup keeps its notches.
+    if editor.mode == EditorMode::Settings {
+        return match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                handle_settings_click(editor, event.column, event.row, layout.frame)
+            }
+            MouseEventKind::ScrollUp => handle_wheel(editor, -1, layout),
+            MouseEventKind::ScrollDown => handle_wheel(editor, 1, layout),
             _ => MouseAction::None,
         };
     }
@@ -114,6 +142,42 @@ fn handle_confirm_click(
     } else {
         MouseAction::None
     }
+}
+
+/// A click while the settings screen is open.
+///
+/// Nothing is decided here beyond *which row the pointer is on*: the category
+/// list has to be rebuilt when it changes, a value may need saving to the
+/// config file, and a theme previews as the highlight passes over it -- all of
+/// which is `App`'s. Deciding it twice is how the mouse and the keyboard drift
+/// apart.
+fn handle_settings_click(
+    editor: &mut Editor,
+    x: u16,
+    y: u16,
+    frame: ratatui::layout::Rect,
+) -> MouseAction {
+    let Some(placed) = crate::ui::settings::layout(&editor.settings, frame) else {
+        return MouseAction::None;
+    };
+
+    // The value list owns the screen while it is open, exactly as it does
+    // under the keyboard: a click behind it would act on rows that cannot be
+    // seen, and one outside it must not close it either.
+    if let Some(picker) = &placed.picker {
+        return match picker.option_at(x, y) {
+            Some(index) => MouseAction::SettingsOption(index),
+            None => MouseAction::None,
+        };
+    }
+
+    if let Some(index) = placed.category_at(x, y) {
+        return MouseAction::SettingsCategory(index);
+    }
+    if let Some(index) = placed.item_at(x, y) {
+        return MouseAction::SettingsItem(index);
+    }
+    MouseAction::None
 }
 
 fn handle_left_click(editor: &mut Editor, x: u16, y: u16, layout: &AppLayout) -> MouseAction {
