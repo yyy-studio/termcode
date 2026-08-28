@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "termcode"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2128,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-config"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "encoding_rs",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-lsp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "lsp-types",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-plugin"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2189,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-syntax"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "once_cell",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-term"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-theme"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ratatui",
  "serde",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "termcode-view"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "ignore",
