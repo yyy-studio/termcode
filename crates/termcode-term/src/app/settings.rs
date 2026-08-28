@@ -130,6 +130,12 @@ impl App {
                 SettingValue::Bool(self.editor.file_tree_style.respect_gitignore),
                 config_target(&["ui", "respect_gitignore"]),
             ),
+            SettingItem::new(
+                "Show Hidden Files",
+                SettingValue::Bool(self.editor.file_tree_style.show_hidden_files),
+                config_target(&["ui", "show_hidden_files"]),
+            )
+            .with_detail("Lists dotfiles (.git, .env) in the tree and the file finder"),
         ]
     }
 
@@ -868,6 +874,16 @@ impl App {
                 if let Err(e) = self.editor.file_explorer.refresh() {
                     log::warn!("File tree refresh after a settings change failed: {e}");
                 }
+            }
+            ["ui", "show_hidden_files"] => {
+                self.editor.file_tree_style.show_hidden_files = flag;
+                self.editor.file_explorer.show_hidden = flag;
+                if let Err(e) = self.editor.file_explorer.refresh() {
+                    log::warn!("File tree refresh after a settings change failed: {e}");
+                }
+                // The finder walks the project once and keeps the list; it
+                // would otherwise answer under the old rule until a restart.
+                self.editor.fuzzy_finder.all_files.clear();
             }
             ["editor", "tab_size"] => {
                 self.editor.config.tab_size = number.max(1) as usize;

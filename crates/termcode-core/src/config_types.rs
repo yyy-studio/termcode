@@ -50,6 +50,10 @@ pub struct FileTreeStyle {
     pub show_file_type_emoji: bool,
     /// Respect .gitignore when listing files
     pub respect_gitignore: bool,
+    /// Show dotfiles (`.git`, `.env`, ...) in the file explorer and the fuzzy
+    /// finder. Separate from `respect_gitignore`: a hidden file is hidden
+    /// because of its name, not because a `.gitignore` names it.
+    pub show_hidden_files: bool,
 }
 
 impl Default for FileTreeStyle {
@@ -58,6 +62,7 @@ impl Default for FileTreeStyle {
             tree_style: true,
             show_file_type_emoji: true,
             respect_gitignore: true,
+            show_hidden_files: false,
         }
     }
 }
