@@ -180,8 +180,12 @@ impl App {
         let session_root = editor.file_explorer.root.clone();
         editor.file_tree_style = app_config.ui.file_tree_style;
         editor.file_explorer.respect_gitignore = app_config.ui.file_tree_style.respect_gitignore;
-        if !app_config.ui.file_tree_style.respect_gitignore {
-            // Reload file tree without gitignore filtering
+        editor.file_explorer.show_hidden = app_config.ui.file_tree_style.show_hidden_files;
+        if !app_config.ui.file_tree_style.respect_gitignore
+            || app_config.ui.file_tree_style.show_hidden_files
+        {
+            // The tree was walked with the constructor's defaults, so a config
+            // that differs from them has to walk it again.
             let _ = editor.file_explorer.refresh();
         }
         editor.file_explorer.width = app_config.ui.sidebar_width;

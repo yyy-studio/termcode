@@ -179,6 +179,7 @@ impl Editor {
             viewport_height: 0,
             scroll_left: 0,
             respect_gitignore: true,
+            show_hidden: false,
             new_entry: None,
             resizing: None,
         });

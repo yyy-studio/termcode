@@ -127,6 +127,10 @@ pub struct FileExplorer {
     pub viewport_height: usize,
     pub scroll_left: u16,
     pub respect_gitignore: bool,
+    /// List dotfiles as well. Independent of `respect_gitignore`: a name
+    /// starting with `.` is not a `.gitignore` rule, and hiding the two
+    /// behind one flag meant showing `target/` to see `.env`.
+    pub show_hidden: bool,
     /// Set while a new file or directory is being named inline in the tree.
     pub new_entry: Option<NewEntryInput>,
     /// The sidebar width as it was when the divider between the sidebar and
@@ -154,6 +158,7 @@ impl FileExplorer {
             viewport_height: 0,
             scroll_left: 0,
             respect_gitignore,
+            show_hidden: false,
             new_entry: None,
             resizing: None,
         };
@@ -519,7 +524,7 @@ impl FileExplorer {
 
         let walker = WalkBuilder::new(dir)
             .max_depth(Some(1))
-            .hidden(self.respect_gitignore)
+            .hidden(!self.show_hidden)
             .git_ignore(self.respect_gitignore)
             .git_global(self.respect_gitignore)
             .git_exclude(self.respect_gitignore)
@@ -620,6 +625,25 @@ mod tests {
         for c in name.chars() {
             input.insert_char(c);
         }
+    }
+
+    #[test]
+    fn a_dotfile_is_listed_only_when_hidden_files_are_shown() {
+        let dir = TempDir::new("hidden-files");
+        std::fs::write(dir.0.join(".env"), "").unwrap();
+        std::fs::write(dir.0.join("main.rs"), "").unwrap();
+
+        // Ignore rules are already off in this helper, so the dotfile is
+        // missing because of its name and nothing else.
+        let mut ex = explorer(&dir);
+        let names =
+            |ex: &FileExplorer| -> Vec<String> { ex.tree.iter().map(|n| n.name.clone()).collect() };
+        assert!(!names(&ex).iter().any(|n| n == ".env"));
+        assert!(names(&ex).iter().any(|n| n == "main.rs"));
+
+        ex.show_hidden = true;
+        ex.refresh().unwrap();
+        assert!(names(&ex).iter().any(|n| n == ".env"));
     }
 
     #[test]

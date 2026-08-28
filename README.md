@@ -496,6 +496,7 @@ sidebar_visible = true
 tree_style = true             # tree lines in the file explorer
 show_file_type_emoji = true
 respect_gitignore = true
+show_hidden_files = false     # list dotfiles (.git, .env) in the tree and finder
 
 [keymap]
 # preset = "vim"              # "vscode" (default), "vim", "helix"; "" for the built-in keymap
