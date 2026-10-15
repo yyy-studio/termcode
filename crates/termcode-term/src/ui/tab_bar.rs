@@ -5,7 +5,22 @@ use ratatui::widgets::Widget;
 
 use crate::display_width::ui_char_width;
 use termcode_theme::theme::Theme;
-use termcode_view::tab::TabManager;
+use termcode_view::tab::{Tab, TabManager};
+
+/// The close button drawn at the end of every tab. ASCII rather than `×`
+/// (U+00D7), which is East Asian Ambiguous and would shift the bar in a
+/// terminal that draws ambiguous glyphs two columns wide.
+pub const CLOSE_GLYPH: char = 'x';
+
+/// A tab's label as drawn, up to (not including) the close button.
+/// The single source of the text, shared with `mouse::tab_positions`.
+pub fn tab_label(tab: &Tab) -> String {
+    if tab.modified {
+        format!(" \u{2022} {} ", tab.label)
+    } else {
+        format!(" {} ", tab.label)
+    }
+}
 
 pub struct TabBarWidget<'a> {
     tabs: &'a TabManager,
@@ -62,11 +77,7 @@ impl Widget for TabBarWidget<'_> {
                 inactive_style
             };
 
-            let label = if tab.modified {
-                format!(" \u{2022} {} ", tab.label)
-            } else {
-                format!(" {} ", tab.label)
-            };
+            let label = format!("{}{CLOSE_GLYPH} ", tab_label(tab));
 
             for ch in label.chars() {
                 let ch_width = ui_char_width(ch) as u16;

@@ -870,6 +870,7 @@ impl App {
                 self.editor.tabs.set_active(index);
                 self.editor.sync_active_view_to_tab();
             }
+            MouseAction::CloseTab(index) => self.close_tab_at(index),
             MouseAction::OpenSettings => self.open_settings(),
             MouseAction::Quit => self.handle_quit(),
             MouseAction::ConfirmSelected => self.execute_confirm_action(),
@@ -2095,6 +2096,36 @@ impl App {
             ];
             self.editor.confirm_dialog =
                 Some(ConfirmDialog::new(ConfirmAction::QuitAll, message, buttons));
+        }
+    }
+
+    /// Close the tab at `index`, from its close button. The tab is made active
+    /// first so the unsaved-changes dialog is shown over the document it is
+    /// asking about; when it closes without one, the tab that was active
+    /// before stays active.
+    fn close_tab_at(&mut self, index: usize) {
+        use termcode_view::image::TabContent;
+
+        let Some(previous) = self.editor.tabs.active_tab().map(|t| t.content.clone()) else {
+            return;
+        };
+        if index >= self.editor.tabs.tabs.len() {
+            return;
+        }
+        self.editor.tabs.set_active(index);
+        self.editor.sync_active_view_to_tab();
+        self.handle_close_tab_with_confirm();
+
+        if self.editor.confirm_dialog.is_some() {
+            return;
+        }
+        let restored = match previous {
+            TabContent::Document(id) => self.editor.tabs.find_by_doc_id(id),
+            TabContent::Image(id) => self.editor.tabs.find_by_image_id(id),
+        };
+        if let Some(restored) = restored {
+            self.editor.tabs.set_active(restored);
+            self.editor.sync_active_view_to_tab();
         }
     }
 
