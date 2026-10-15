@@ -13,6 +13,9 @@ pub enum MouseAction {
     /// Expand or collapse the tree row, from a click on its chevron.
     ToggleExplorerExpand(usize),
     SwitchTab(usize),
+    /// A click on a tab's close button. Whether unsaved changes need
+    /// confirming first is `App`'s to decide.
+    CloseTab(usize),
     OpenSettings,
     /// An explorer toolbar button, named by its command without the
     /// `explorer.` prefix.
@@ -574,30 +577,45 @@ fn handle_tab_bar_click(
     let positions = tab_positions(&editor.tabs);
     let click_x = (x - tab_bar.x) as usize;
 
-    for (i, (start, end)) in positions.iter().enumerate() {
-        if click_x >= *start && click_x < *end {
+    for (i, tab) in positions.iter().enumerate() {
+        if click_x == tab.close {
+            return MouseAction::CloseTab(i);
+        }
+        if click_x >= tab.start && click_x < tab.end {
             return MouseAction::SwitchTab(i);
         }
     }
     MouseAction::None
 }
 
-/// Compute tab label positions (start_x, end_x) for mouse hit-testing.
-pub fn tab_positions(tabs: &termcode_view::tab::TabManager) -> Vec<(usize, usize)> {
+/// Where one tab sits in the tab bar, in columns from the bar's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabPosition {
+    pub start: usize,
+    /// Exclusive.
+    pub end: usize,
+    /// The close button's column.
+    pub close: usize,
+}
+
+/// Compute tab positions for mouse hit-testing. Each tab is its label
+/// (`ui::tab_bar::tab_label`), then the close glyph and one space.
+pub fn tab_positions(tabs: &termcode_view::tab::TabManager) -> Vec<TabPosition> {
     let mut positions = Vec::new();
     let mut x: usize = 0;
     for (i, tab) in tabs.tabs.iter().enumerate() {
         if i > 0 {
             x += 1; // separator '|'
         }
-        let label_width = crate::display_width::ui_str_width(&tab.label);
-        let label_len = if tab.modified {
-            3 + label_width + 1
-        } else {
-            1 + label_width + 1
-        };
-        positions.push((x, x + label_len));
-        x += label_len;
+        let label_width = crate::display_width::ui_str_width(&crate::ui::tab_bar::tab_label(tab));
+        let close = x + label_width;
+        let end = close + 2;
+        positions.push(TabPosition {
+            start: x,
+            end,
+            close,
+        });
+        x = end;
     }
     positions
 }
@@ -780,8 +798,15 @@ mod tests {
         );
         let positions = tab_positions(&tabs);
         assert_eq!(positions.len(), 1);
-        // " main.rs " = 1 + 7 + 1 = 9
-        assert_eq!(positions[0], (0, 9));
+        // " main.rs x " = 1 + 7 + 1 + 2 = 11, close button at 9
+        assert_eq!(
+            positions[0],
+            TabPosition {
+                start: 0,
+                end: 11,
+                close: 9
+            }
+        );
     }
 
     #[test]
@@ -797,9 +822,23 @@ mod tests {
         );
         let positions = tab_positions(&tabs);
         assert_eq!(positions.len(), 2);
-        // " a.rs " = 6, then separator (1), " b.rs " = 6
-        assert_eq!(positions[0], (0, 6));
-        assert_eq!(positions[1], (7, 13));
+        // " a.rs x " = 8, then separator (1), " b.rs x " = 8
+        assert_eq!(
+            positions[0],
+            TabPosition {
+                start: 0,
+                end: 8,
+                close: 6
+            }
+        );
+        assert_eq!(
+            positions[1],
+            TabPosition {
+                start: 9,
+                end: 17,
+                close: 15
+            }
+        );
     }
 
     #[test]
